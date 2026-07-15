@@ -34,6 +34,8 @@ import {
   publishUnpublishedEntry,
   unpublishPublishedEntry,
   deleteUnpublishedEntry,
+  queueUnpublishedEntry,
+  publishBatch,
 } from '../../actions/editorialWorkflow';
 import { loadDeployPreview } from '../../actions/deploys';
 import { selectEntry, selectUnpublishedEntry, selectDeployPreview } from '../../reducers';
@@ -81,6 +83,8 @@ export class Editor extends React.Component {
     updateUnpublishedEntryStatus: PropTypes.func.isRequired,
     publishUnpublishedEntry: PropTypes.func.isRequired,
     deleteUnpublishedEntry: PropTypes.func.isRequired,
+    queueUnpublishedEntry: PropTypes.func.isRequired,
+    publishBatch: PropTypes.func.isRequired,
     logoutUser: PropTypes.func.isRequired,
     loadEntries: PropTypes.func.isRequired,
     deployPreview: PropTypes.object,
@@ -316,6 +320,26 @@ export class Editor extends React.Component {
     duplicate && createDraftDuplicateFromEntry(entryDraft.get('entry'));
   };
 
+  handleQueueEntry = async () => {
+    const { queueUnpublishedEntry, collection } = this.props;
+
+    await queueUnpublishedEntry(collection);
+
+    this.deleteBackup();
+  };
+
+  handlePublishWithBatch = async () => {
+    const { queueUnpublishedEntry, publishBatch, collection, t } = this.props;
+    if (!window.confirm(t('editor.editor.onPublishingWithBatch'))) {
+      return;
+    }
+
+    await queueUnpublishedEntry(collection);
+    await publishBatch();
+
+    this.deleteBackup();
+  };
+
   handleUnpublishEntry = async () => {
     const { unpublishPublishedEntry, collection, slug, t } = this.props;
     if (!window.confirm(t('editor.editor.onUnpublishing'))) return;
@@ -450,6 +474,8 @@ export class Editor extends React.Component {
         onDeleteUnpublishedChanges={this.handleDeleteUnpublishedChanges}
         onChangeStatus={this.handleChangeStatus}
         onPublish={this.handlePublishEntry}
+        onQueue={this.handleQueueEntry}
+        onPublishWithBatch={this.handlePublishWithBatch}
         unPublish={this.handleUnpublishEntry}
         onDuplicate={this.handleDuplicateEntry}
         showDelete={this.props.showDelete}
@@ -550,6 +576,8 @@ const mapDispatchToProps = {
   publishUnpublishedEntry,
   unpublishPublishedEntry,
   deleteUnpublishedEntry,
+  queueUnpublishedEntry,
+  publishBatch,
   logoutUser,
   loadNotesForEntry,
   loadNotes,

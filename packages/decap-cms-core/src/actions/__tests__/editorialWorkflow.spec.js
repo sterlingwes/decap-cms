@@ -214,4 +214,125 @@ describe('editorialWorkflow actions', () => {
       });
     });
   });
+
+  describe('publishBatch', () => {
+    it('should notify when the batch is empty', () => {
+      const { currentBackend } = require('../../backend');
+      currentBackend.mockReturnValue({});
+
+      const store = mockStore({
+        config: fromJS({}),
+        collections: fromJS({ posts: { name: 'posts' } }),
+        editorialWorkflow: fromJS({
+          pages: { ids: [] },
+          entities: {},
+        }),
+      });
+
+      return store.dispatch(actions.publishBatch()).then(() => {
+        const dispatched = store.getActions();
+        const notifications = dispatched.filter(a => a.type === 'NOTIFICATION_SEND');
+        expect(notifications).toHaveLength(1);
+        expect(notifications[0].payload.message.key).toEqual('ui.toast.onBatchEmpty');
+      });
+    });
+
+    it('should publish every entry queued in the batch and summarize', () => {
+      const { currentBackend } = require('../../backend');
+
+      const publishUnpublishedEntry = jest.fn().mockResolvedValue();
+      const backend = {
+        publishUnpublishedEntry,
+        getEntry: jest.fn().mockResolvedValue({}),
+        getMedia: jest.fn().mockResolvedValue([]),
+        getNotes: jest.fn().mockResolvedValue([]),
+      };
+      currentBackend.mockReturnValue(backend);
+
+      const store = mockStore({
+        config: fromJS({}),
+        integrations: fromJS([]),
+        mediaLibrary: fromJS({ isLoading: false }),
+        collections: fromJS({ posts: { name: 'posts' } }),
+        editorialWorkflow: fromJS({
+          pages: { ids: ['posts.one', 'posts.two'] },
+          entities: {
+            'posts.one': { collection: 'posts', slug: 'one', status: 'pending_publish' },
+            'posts.two': { collection: 'posts', slug: 'two', status: 'pending_publish' },
+            'posts.draft': { collection: 'posts', slug: 'draft', status: 'draft' },
+          },
+        }),
+      });
+
+      return store.dispatch(actions.publishBatch()).then(() => {
+        const dispatched = store.getActions();
+
+        // only the two "pending_publish" entries are published, not the draft
+        expect(publishUnpublishedEntry).toHaveBeenCalledTimes(2);
+        const published = dispatched.filter(a => a.type === 'UNPUBLISHED_ENTRY_PUBLISH_SUCCESS');
+        expect(published.map(a => a.payload.slug).sort()).toEqual(['one', 'two']);
+
+        // media is reloaded once for the whole batch
+        expect(
+          dispatched.filter(a => a.type === 'MEDIA_LOAD_REQUEST'),
+        ).toHaveLength(1);
+
+        const summary = dispatched.find(
+          a => a.type === 'NOTIFICATION_SEND' && a.payload.message.key === 'ui.toast.batchPublished',
+        );
+        expect(summary).toBeDefined();
+        expect(summary.payload.message.count).toEqual(2);
+      });
+    });
+
+    it('should stop on the first failure and report the failed entry', () => {
+      const { currentBackend } = require('../../backend');
+
+      const error = new Error('merge conflict');
+      const publishUnpublishedEntry = jest
+        .fn()
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(error);
+      const backend = {
+        publishUnpublishedEntry,
+        getEntry: jest.fn().mockResolvedValue({}),
+        getMedia: jest.fn().mockResolvedValue([]),
+        getNotes: jest.fn().mockResolvedValue([]),
+      };
+      currentBackend.mockReturnValue(backend);
+
+      const store = mockStore({
+        config: fromJS({}),
+        integrations: fromJS([]),
+        mediaLibrary: fromJS({ isLoading: false }),
+        collections: fromJS({ posts: { name: 'posts' } }),
+        editorialWorkflow: fromJS({
+          pages: { ids: ['posts.one', 'posts.two', 'posts.three'] },
+          entities: {
+            'posts.one': { collection: 'posts', slug: 'one', status: 'pending_publish' },
+            'posts.two': { collection: 'posts', slug: 'two', status: 'pending_publish' },
+            'posts.three': { collection: 'posts', slug: 'three', status: 'pending_publish' },
+          },
+        }),
+      });
+
+      return store.dispatch(actions.publishBatch()).then(() => {
+        const dispatched = store.getActions();
+
+        // stops after the failure: first succeeds, second fails, third never attempted
+        expect(publishUnpublishedEntry).toHaveBeenCalledTimes(2);
+        expect(
+          dispatched.filter(a => a.type === 'UNPUBLISHED_ENTRY_PUBLISH_SUCCESS'),
+        ).toHaveLength(1);
+
+        const failure = dispatched.find(
+          a =>
+            a.type === 'NOTIFICATION_SEND' &&
+            a.payload.message.key === 'ui.toast.onFailToPublishBatchEntry',
+        );
+        expect(failure).toBeDefined();
+        expect(failure.payload.message.slug).toEqual('two');
+      });
+    });
+  });
 });

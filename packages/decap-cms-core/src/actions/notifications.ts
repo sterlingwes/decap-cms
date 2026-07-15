@@ -3,6 +3,10 @@ import type { TypeOptions } from 'react-toastify';
 export interface NotificationMessage {
   details?: unknown;
   key: string;
+  // Extra values are interpolated into the translated message (the notification
+  // renderer spreads the whole message object as polyglot params), e.g. the
+  // `%{count}` in a batch-published toast.
+  [param: string]: unknown;
 }
 
 export interface NotificationPayload {

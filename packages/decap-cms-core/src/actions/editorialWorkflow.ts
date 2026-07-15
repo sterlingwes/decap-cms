@@ -8,6 +8,7 @@ import {
   selectUnpublishedSlugs,
   selectEntry,
   selectUnpublishedEntry,
+  selectUnpublishedEntriesByStatus,
 } from '../reducers';
 import { selectEditingDraft } from '../reducers/entries';
 import { EDITORIAL_WORKFLOW, status } from '../constants/publishModes';
@@ -320,7 +321,14 @@ export function loadUnpublishedEntries(collections: Collections) {
   };
 }
 
-export function persistUnpublishedEntry(collection: Collection, existingUnpublishedEntry: boolean) {
+export function persistUnpublishedEntry(
+  collection: Collection,
+  existingUnpublishedEntry: boolean,
+  // When provided, the entry is persisted straight into the batch at this
+  // workflow status (e.g. "pending_publish") instead of the default initial
+  // status. Used by the change-batching workflow.
+  queueStatus?: string,
+) {
   return async (dispatch: ThunkDispatch<State, {}, AnyAction>, getState: () => State) => {
     const state = getState();
     const entryDraft = state.entryDraft;
@@ -329,6 +337,12 @@ export function persistUnpublishedEntry(collection: Collection, existingUnpublis
     const publishedSlugs = selectPublishedSlugs(state, collection.get('name'));
     const usedSlugs = publishedSlugs.concat(unpublishedSlugs) as List<string>;
     const entriesLoaded = get(state.editorialWorkflow.toJS(), 'pages.ids', false);
+    const existingEntry = selectUnpublishedEntry(
+      state,
+      collection.get('name'),
+      state.entryDraft.getIn(['entry', 'slug']),
+    );
+    const currentStatus = existingEntry && existingEntry.get('status');
 
     //load unpublishedEntries
     !entriesLoaded && dispatch(loadUnpublishedEntries(state.collections));
@@ -374,11 +388,27 @@ export function persistUnpublishedEntry(collection: Collection, existingUnpublis
         entryDraft: serializedEntryDraft,
         assetProxies,
         usedSlugs,
+        status: queueStatus,
       });
+
+      // For an entry that's already in the workflow the persist path commits to
+      // its existing branch without touching the PR label, so bump the status
+      // explicitly to move it into the batch.
+      if (queueStatus && existingUnpublishedEntry && currentStatus !== queueStatus) {
+        await backend.updateUnpublishedEntryStatus(collection.get('name'), newSlug, queueStatus);
+        dispatch(
+          unpublishedEntryStatusChangePersisted(
+            collection.get('name'),
+            newSlug,
+            queueStatus as Status,
+          ),
+        );
+      }
+
       dispatch(
         addNotification({
           message: {
-            key: 'ui.toast.entrySaved',
+            key: queueStatus ? 'ui.toast.entryQueued' : 'ui.toast.entrySaved',
           },
           type: 'success',
           dismissAfter: 4000,
@@ -406,6 +436,21 @@ export function persistUnpublishedEntry(collection: Collection, existingUnpublis
       );
     }
   };
+}
+
+/**
+ * Persist the current draft straight into the batch (the "Ready to publish"
+ * queue) in a single action, saving it first if needed. This is the editor
+ * shorthand for the manual "save, then drag to Ready on the workflow board"
+ * flow. Since a single batch is assumed, the batch is simply the set of
+ * unpublished entries at the `pending_publish` status.
+ */
+export function queueUnpublishedEntry(collection: Collection, existingUnpublishedEntry: boolean) {
+  return persistUnpublishedEntry(
+    collection,
+    existingUnpublishedEntry,
+    status.get('PENDING_PUBLISH'),
+  );
 }
 
 export function updateUnpublishedEntryStatus(
@@ -518,6 +563,116 @@ export function publishUnpublishedEntry(collectionName: string, slug: string) {
         }),
       );
       dispatch(unpublishedEntryPublishError(collectionName, slug));
+    }
+  };
+}
+
+/**
+ * Publishes a single unpublished entry and refreshes the affected state,
+ * re-throwing on failure so a batch can stop on the first error. Media
+ * reloading and success notifications are intentionally left to the caller so
+ * the batch can summarize rather than emit one of each per entry.
+ */
+async function publishBatchEntry(
+  dispatch: ThunkDispatch<State, {}, AnyAction>,
+  getState: () => State,
+  collectionName: string,
+  slug: string,
+) {
+  const state = getState();
+  const collections = state.collections;
+  const backend = currentBackend(state.config);
+  const entry = selectUnpublishedEntry(state, collectionName, slug);
+  dispatch(unpublishedEntryPublishRequest(collectionName, slug));
+  try {
+    await backend.publishUnpublishedEntry(entry);
+    dispatch(unpublishedEntryPublished(collectionName, slug));
+    const collection = collections.get(collectionName);
+    if (collection.has('nested')) {
+      dispatch(loadEntries(collection));
+      const newSlug = slugFromCustomPath(collection, entry.get('path'));
+      loadEntry(collection, newSlug);
+      if (slug !== newSlug && selectEditingDraft(state.entryDraft)) {
+        navigateToEntry(collection.get('name'), newSlug);
+      }
+    } else {
+      await dispatch(loadEntry(collection, slug));
+    }
+  } catch (error) {
+    dispatch(unpublishedEntryPublishError(collectionName, slug));
+    throw error;
+  }
+}
+
+/**
+ * Publishes every entry currently in the batch (all unpublished entries at the
+ * `pending_publish` status). Entries are published sequentially since each one
+ * merges its own pull request into the base branch; on the first failure
+ * (e.g. a merge conflict) the batch stops and reports which entry failed,
+ * leaving the remaining entries queued.
+ */
+export function publishBatch() {
+  return async (dispatch: ThunkDispatch<State, {}, AnyAction>, getState: () => State) => {
+    let state = getState();
+    const backend = currentBackend(state.config);
+
+    // Make sure the unpublished entries are loaded so the batch is complete.
+    const entriesLoaded = get(state.editorialWorkflow.toJS(), 'pages.ids', false);
+    if (!entriesLoaded) {
+      try {
+        const { entries, pagination } = await backend.unpublishedEntries(state.collections);
+        dispatch(unpublishedEntriesLoaded(entries, pagination));
+        // eslint-disable-next-line no-empty
+      } catch (e) {}
+      state = getState();
+    }
+
+    const readyEntries = selectUnpublishedEntriesByStatus(
+      state,
+      status.get('PENDING_PUBLISH') as Status,
+    );
+    const pending = readyEntries ? readyEntries.toArray() : [];
+
+    if (pending.length === 0) {
+      dispatch(
+        addNotification({
+          message: { key: 'ui.toast.onBatchEmpty' },
+          type: 'info',
+          dismissAfter: 4000,
+        }),
+      );
+      return;
+    }
+
+    let publishedCount = 0;
+    for (const entry of pending) {
+      const collectionName = entry.get('collection');
+      const slug = entry.get('slug');
+      try {
+        await publishBatchEntry(dispatch, getState, collectionName, slug);
+        publishedCount += 1;
+      } catch (error) {
+        dispatch(
+          addNotification({
+            message: { key: 'ui.toast.onFailToPublishBatchEntry', details: error, slug },
+            type: 'error',
+            dismissAfter: 8000,
+          }),
+        );
+        break;
+      }
+    }
+
+    if (publishedCount > 0) {
+      // re-load media after entries were published
+      dispatch(loadMedia());
+      dispatch(
+        addNotification({
+          message: { key: 'ui.toast.batchPublished', count: publishedCount },
+          type: 'success',
+          dismissAfter: 4000,
+        }),
+      );
     }
   };
 }

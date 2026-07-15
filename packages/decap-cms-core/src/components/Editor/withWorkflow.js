@@ -4,7 +4,11 @@ import { connect } from 'react-redux';
 import { EDITORIAL_WORKFLOW } from '../../constants/publishModes';
 import { selectUnpublishedEntry } from '../../reducers';
 import { selectAllowDeletion } from '../../reducers/collections';
-import { loadUnpublishedEntry, persistUnpublishedEntry } from '../../actions/editorialWorkflow';
+import {
+  loadUnpublishedEntry,
+  persistUnpublishedEntry,
+  queueUnpublishedEntry,
+} from '../../actions/editorialWorkflow';
 
 function mapStateToProps(state, ownProps) {
   const { collections } = state;
@@ -37,6 +41,10 @@ function mergeProps(stateProps, dispatchProps, ownProps) {
     // Overwrite persistEntry to persistUnpublishedEntry
     returnObj.persistEntry = collection =>
       dispatch(persistUnpublishedEntry(collection, unpublishedEntry));
+
+    // Queue the change into the batch, saving into the workflow first if needed
+    returnObj.queueUnpublishedEntry = collection =>
+      dispatch(queueUnpublishedEntry(collection, unpublishedEntry));
   }
 
   return {

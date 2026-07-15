@@ -42,6 +42,8 @@ describe('Editor', () => {
     updateUnpublishedEntryStatus: jest.fn(),
     publishUnpublishedEntry: jest.fn(),
     deleteUnpublishedEntry: jest.fn(),
+    queueUnpublishedEntry: jest.fn(),
+    publishBatch: jest.fn(),
     logoutUser: jest.fn(),
     loadEntries: jest.fn(),
     deployPreview: fromJS({}),
