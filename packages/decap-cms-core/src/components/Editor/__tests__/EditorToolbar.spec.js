@@ -118,6 +118,49 @@ describe('EditorToolbar', () => {
     });
   });
 
+  describe('batch controls', () => {
+    it('should render the batch dropdown when batch handlers are provided in a publishable workflow', () => {
+      const { getByText } = render(
+        <EditorToolbar
+          {...props}
+          hasWorkflow={true}
+          currentStatus="draft"
+          collection={fromJS({ name: 'posts', publish: true })}
+          onQueue={jest.fn()}
+          onPublishWithBatch={jest.fn()}
+        />,
+      );
+      expect(getByText('editor.editorToolbar.batch')).toBeInTheDocument();
+    });
+
+    it('should not render the batch dropdown for open authoring (cannot publish)', () => {
+      const { queryByText } = render(
+        <EditorToolbar
+          {...props}
+          hasWorkflow={true}
+          currentStatus="draft"
+          collection={fromJS({ name: 'posts', publish: true })}
+          useOpenAuthoring={true}
+          onQueue={jest.fn()}
+          onPublishWithBatch={jest.fn()}
+        />,
+      );
+      expect(queryByText('editor.editorToolbar.batch')).not.toBeInTheDocument();
+    });
+
+    it('should not render the batch dropdown when handlers are absent', () => {
+      const { queryByText } = render(
+        <EditorToolbar
+          {...props}
+          hasWorkflow={true}
+          currentStatus="draft"
+          collection={fromJS({ name: 'posts', publish: true })}
+        />,
+      );
+      expect(queryByText('editor.editorToolbar.batch')).not.toBeInTheDocument();
+    });
+  });
+
   describe('deploy preview polling', () => {
     it('should poll with maxAttempts: 24 and an AbortSignal on mount for existing entries', () => {
       render(<EditorToolbar {...props} isNewEntry={false} />);

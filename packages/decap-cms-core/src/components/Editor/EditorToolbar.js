@@ -204,6 +204,11 @@ const StatusButton = styled(DropdownButton)`
   color: ${colorsRaw.teal};
 `;
 
+const BatchButton = styled(DropdownButton)`
+  background-color: ${colorsRaw.tealLight};
+  color: ${colorsRaw.teal};
+`;
+
 const PreviewButtonContainer = styled.div`
   margin-right: 12px;
   color: ${colorsRaw.blue};
@@ -276,6 +281,8 @@ export class EditorToolbar extends React.Component {
     onDeleteUnpublishedChanges: PropTypes.func.isRequired,
     onChangeStatus: PropTypes.func.isRequired,
     onPublish: PropTypes.func.isRequired,
+    onQueue: PropTypes.func,
+    onPublishWithBatch: PropTypes.func,
     unPublish: PropTypes.func.isRequired,
     onDuplicate: PropTypes.func.isRequired,
     onPublishAndNew: PropTypes.func.isRequired,
@@ -593,11 +600,44 @@ export class EditorToolbar extends React.Component {
     }
   };
 
+  renderBatchControls = () => {
+    const { onQueue, onPublishWithBatch, isPersisting, isPublishing, t } = this.props;
+
+    const busy = isPersisting || isPublishing;
+
+    return (
+      <ToolbarDropdown
+        key="batch-controls"
+        dropdownTopOverlap="40px"
+        dropdownWidth="240px"
+        renderButton={() => (
+          <BatchButton>
+            {busy ? t('editor.editorToolbar.batching') : t('editor.editorToolbar.batch')}
+          </BatchButton>
+        )}
+      >
+        <PublishDropDownItem
+          label={t('editor.editorToolbar.queueInBatch')}
+          icon="add"
+          onClick={onQueue}
+        />
+        <PublishDropDownItem
+          label={t('editor.editorToolbar.publishWithBatch')}
+          icon="arrow"
+          iconDirection="right"
+          onClick={onPublishWithBatch}
+        />
+      </ToolbarDropdown>
+    );
+  };
+
   renderWorkflowControls = () => {
     const {
       onPersist,
       onDelete,
       onDeleteUnpublishedChanges,
+      onQueue,
+      onPublishWithBatch,
       showDelete,
       hasChanged,
       hasUnpublishedChanges,
@@ -648,6 +688,9 @@ export class EditorToolbar extends React.Component {
               })}
             </React.Fragment>
           ),
+      canPublish && onQueue && onPublishWithBatch ? (
+        <React.Fragment key="batch-controls">{this.renderBatchControls()}</React.Fragment>
+      ) : null,
       (!showDelete || useOpenAuthoring) && !hasUnpublishedChanges && !isModification ? null : (
         <DeleteButton
           key="delete-button"

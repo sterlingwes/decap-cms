@@ -267,6 +267,8 @@ class EditorInterface extends Component {
       onDeleteUnpublishedChanges,
       onChangeStatus,
       onPublish,
+      onQueue,
+      onPublishWithBatch,
       unPublish,
       onDuplicate,
       onValidate,
@@ -421,6 +423,8 @@ class EditorInterface extends Component {
           onChangeStatus={onChangeStatus}
           showDelete={showDelete}
           onPublish={onPublish}
+          onQueue={onQueue}
+          onPublishWithBatch={onPublishWithBatch}
           unPublish={unPublish}
           onDuplicate={onDuplicate}
           onPublishAndNew={() => this.handleOnPublish({ createNew: true })}
@@ -508,6 +512,8 @@ EditorInterface.propTypes = {
   onDelete: PropTypes.func.isRequired,
   onDeleteUnpublishedChanges: PropTypes.func.isRequired,
   onPublish: PropTypes.func.isRequired,
+  onQueue: PropTypes.func,
+  onPublishWithBatch: PropTypes.func,
   unPublish: PropTypes.func.isRequired,
   onDuplicate: PropTypes.func.isRequired,
   onChangeStatus: PropTypes.func.isRequired,
