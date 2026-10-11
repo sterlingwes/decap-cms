@@ -19,16 +19,15 @@ injectStyle();
  * On narrow screens react-toastify stretches the container across the full
  * width and pins it to the top of the viewport, which covers the app and
  * editor toolbars (including the back button) until the toast is dismissed.
- * Offset it below the tallest toolbar (the 66px editor toolbar; the app header
- * is 56px) so navigation stays reachable. Bottom anchoring doesn't work here:
- * the editor's 800px min-width widens the layout viewport past the screen, so
- * `bottom: 0` lands off-screen. The 480px breakpoint matches react-toastify's
- * own mobile breakpoint.
+ * Anchor it to the bottom instead so navigation stays reachable. The 480px
+ * breakpoint matches react-toastify's own mobile breakpoint.
  */
 const mobileContainerStyles = css`
   @media only screen and (max-width: 480px) {
     .notif__container.Toastify__toast-container--top-right {
-      top: 66px;
+      top: auto;
+      bottom: 0;
+      padding-bottom: env(safe-area-inset-bottom);
     }
   }
 `;
