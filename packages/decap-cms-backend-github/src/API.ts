@@ -72,6 +72,11 @@ const { fetchWithTimeout: fetch } = unsentRequest;
 
 export const MOCK_PULL_REQUEST = -1;
 
+// Files read per GraphQL query, and how many of those queries run at once,
+// when loading many entries (e.g. a whole collection for sorting).
+const GRAPHQL_BATCH_SIZE = 50;
+const GRAPHQL_CONCURRENT_CHUNKS = 4;
+
 export interface Config {
   apiRoot?: string;
   token?: string;
@@ -705,6 +710,180 @@ export default class API {
     };
     const fileMetadata = await readFileMetadata(sha, fetchFileMetadata, localForage);
     return fileMetadata;
+  }
+
+  async graphqlQuery<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+    const result: { data?: T; errors?: { message: string }[] } = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({ query, variables }),
+    });
+    if (!result.data) {
+      throw new APIError(
+        result.errors?.map(e => e.message).join(', ') || 'Empty GraphQL response',
+        500,
+        API_NAME,
+      );
+    }
+    return result.data;
+  }
+
+  /**
+   * Runs `fetchChunk` over `items` in chunks of GRAPHQL_BATCH_SIZE, a few chunks
+   * at a time. A failed chunk is logged and skipped so callers can fall back to
+   * per-file requests for whatever is missing from the result.
+   */
+  async inGraphQLChunks<T>(items: T[], fetchChunk: (chunk: T[]) => Promise<void>) {
+    const chunks = [];
+    for (let i = 0; i < items.length; i += GRAPHQL_BATCH_SIZE) {
+      chunks.push(items.slice(i, i + GRAPHQL_BATCH_SIZE));
+    }
+    for (let i = 0; i < chunks.length; i += GRAPHQL_CONCURRENT_CHUNKS) {
+      await Promise.all(
+        chunks.slice(i, i + GRAPHQL_CONCURRENT_CHUNKS).map(chunk =>
+          fetchChunk(chunk).catch(error => {
+            console.warn(`Batched ${API_NAME} GraphQL read failed, falling back`, error);
+          }),
+        ),
+      );
+    }
+  }
+
+  /**
+   * Reads the text content of many files using one GraphQL query per
+   * GRAPHQL_BATCH_SIZE files instead of one REST request each. Returns a map of
+   * blob sha to content. Files that couldn't be read this way (binary,
+   * truncated, or a failed query) are left out, so callers should fall back to
+   * `readFile` for any sha missing from the map.
+   */
+  async readFilesBatch(
+    files: { id?: string | null }[],
+    { repoURL = this.repoURL }: { repoURL?: string } = {},
+  ) {
+    const contents = new Map<string, string>();
+    const ids = [...new Set(files.map(file => file.id).filter(Boolean) as string[])];
+
+    const uncached = [] as string[];
+    await Promise.all(
+      ids.map(async id => {
+        const cached = await localForage.getItem<string>(`gh.${id}`);
+        if (typeof cached === 'string') {
+          contents.set(id, cached);
+        } else {
+          uncached.push(id);
+        }
+      }),
+    );
+
+    const [owner, name] = trimStart(repoURL, '/').split('/').slice(1);
+    await this.inGraphQLChunks(uncached, async chunk => {
+      const variables: Record<string, string> = { owner, name };
+      chunk.forEach((id, i) => (variables[`o${i}`] = id));
+      const query = `query($owner: String!, $name: String!, ${chunk
+        .map((_, i) => `$o${i}: GitObjectID!`)
+        .join(', ')}) {
+        repository(owner: $owner, name: $name) {
+          ${chunk
+            .map(
+              (_, i) => `f${i}: object(oid: $o${i}) { ... on Blob { text isBinary isTruncated } }`,
+            )
+            .join('\n')}
+        }
+      }`;
+      const data = await this.graphqlQuery<{
+        repository: Record<
+          string,
+          { text: string | null; isBinary: boolean; isTruncated: boolean } | null
+        >;
+      }>(query, variables);
+      await Promise.all(
+        chunk.map(async (id, i) => {
+          const blob = data.repository[`f${i}`];
+          if (blob && !blob.isBinary && !blob.isTruncated && typeof blob.text === 'string') {
+            contents.set(id, blob.text);
+            await localForage.setItem(`gh.${id}`, blob.text);
+          }
+        }),
+      );
+    });
+
+    return contents;
+  }
+
+  /**
+   * Batched equivalent of `readFileMetadata`: looks up the latest commit for
+   * many paths with one GraphQL query per GRAPHQL_BATCH_SIZE files. Returns a
+   * map of path to metadata; paths missing from it should fall back to
+   * `readFileMetadata`.
+   */
+  async readFilesMetadataBatch(files: { path: string; id?: string | null }[]) {
+    const metadata = new Map<string, { author: string; updatedOn: string }>();
+
+    const uncached = [] as { path: string; id?: string | null }[];
+    await Promise.all(
+      files.map(async file => {
+        const cached =
+          file.id &&
+          (await localForage.getItem<{ author: string; updatedOn: string }>(`gh.${file.id}.meta`));
+        if (cached) {
+          metadata.set(file.path, cached);
+        } else {
+          uncached.push(file);
+        }
+      }),
+    );
+
+    const [owner, name] = this.originRepo.split('/');
+    await this.inGraphQLChunks(uncached, async chunk => {
+      const variables: Record<string, string> = { owner, name, expression: this.branch };
+      chunk.forEach((file, i) => (variables[`p${i}`] = file.path));
+      const query = `query($owner: String!, $name: String!, $expression: String!, ${chunk
+        .map((_, i) => `$p${i}: String!`)
+        .join(', ')}) {
+        repository(owner: $owner, name: $name) {
+          object(expression: $expression) {
+            ... on Commit {
+              ${chunk
+                .map(
+                  (_, i) =>
+                    `f${i}: history(first: 1, path: $p${i}) { nodes { author { name email date } } }`,
+                )
+                .join('\n')}
+            }
+          }
+        }
+      }`;
+      const data = await this.graphqlQuery<{
+        repository: {
+          object: Record<
+            string,
+            { nodes: { author: { name?: string; email?: string; date?: string } | null }[] }
+          > | null;
+        };
+      }>(query, variables);
+      const commit = data.repository.object;
+      if (!commit) {
+        return;
+      }
+      await Promise.all(
+        chunk.map(async (file, i) => {
+          const author = commit[`f${i}`]?.nodes[0]?.author;
+          const fileMetadata = {
+            author: author?.name || author?.email || '',
+            // GraphQL returns the author's local offset (e.g. +02:00); normalize to
+            // the UTC form the REST API returns so cached values sort consistently
+            updatedOn: author?.date
+              ? new Date(author.date).toISOString().replace(/\.\d{3}Z$/, 'Z')
+              : '',
+          };
+          metadata.set(file.path, fileMetadata);
+          if (file.id) {
+            await localForage.setItem(`gh.${file.id}.meta`, fileMetadata);
+          }
+        }),
+      );
+    });
+
+    return metadata;
   }
 
   async fetchBlobContent({ sha, repoURL, parseText }: BlobArgs) {

@@ -8,7 +8,6 @@ import {
   asyncLock,
   basename,
   getBlobSHA,
-  entriesByFolder,
   entriesByFiles,
   unpublishedEntries,
   getMediaDisplayURL,
@@ -435,31 +434,47 @@ export default class GitHub implements Implementation {
     return { cursor, files: pageFiles };
   };
 
+  /**
+   * Reads the content and commit metadata of many entry files. Both are first
+   * fetched in batched GraphQL queries (one per ~50 files); anything the batch
+   * couldn't return falls back to the per-file REST requests.
+   */
+  async readEntries(
+    files: ImplementationFile[],
+    repoURL: string,
+    { ignoreReadErrors = false }: { ignoreReadErrors?: boolean } = {},
+  ) {
+    const [contents, metadata] = await Promise.all([
+      this.api!.readFilesBatch(files, { repoURL }),
+      this.api!.readFilesMetadataBatch(files),
+    ]);
+
+    const readFile = (path: string, id: string | null | undefined) => {
+      if (id && contents.has(id)) {
+        return Promise.resolve(contents.get(id) as string);
+      }
+      const content = this.api!.readFile(path, id, { repoURL }) as Promise<string>;
+      return ignoreReadErrors ? content.catch(() => '') : content;
+    };
+
+    const readFileMetadata = (path: string, id: string | null | undefined) =>
+      metadata.has(path)
+        ? Promise.resolve(metadata.get(path)!)
+        : this.api!.readFileMetadata(path, id);
+
+    return entriesByFiles(files, readFile, readFileMetadata, API_NAME);
+  }
+
   async entriesByFolder(folder: string, extension: string, depth: number) {
     const repoURL = this.api!.originRepoURL;
 
-    let cursor: Cursor;
-
-    const listFiles = () =>
-      this.api!.listFiles(folder, {
-        repoURL,
-        depth,
-      }).then(files => {
-        const filtered = files.filter(file => filterByExtension(file, extension));
-        const result = this.getCursorAndFiles(filtered, 1);
-        cursor = result.cursor;
-        return result.files;
-      });
-
-    const readFile = (path: string, id: string | null | undefined) =>
-      this.api!.readFile(path, id, { repoURL }) as Promise<string>;
-
-    const files = await entriesByFolder(
-      listFiles,
-      readFile,
-      this.api!.readFileMetadata.bind(this.api),
-      API_NAME,
+    const listed = await this.api!.listFiles(folder, { repoURL, depth });
+    const { cursor, files: pageFiles } = this.getCursorAndFiles(
+      listed.filter(file => filterByExtension(file, extension)),
+      1,
     );
+
+    const files = await this.readEntries(pageFiles, repoURL);
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     files[CURSOR_COMPATIBILITY_SYMBOL] = cursor;
@@ -469,36 +484,18 @@ export default class GitHub implements Implementation {
   async allEntriesByFolder(folder: string, extension: string, depth: number, pathRegex?: RegExp) {
     const repoURL = this.api!.originRepoURL;
 
-    const listFiles = () =>
-      this.api!.listFiles(folder, {
-        repoURL,
-        depth,
-      }).then(files =>
-        files.filter(
-          file => (!pathRegex || pathRegex.test(file.path)) && filterByExtension(file, extension),
-        ),
-      );
-
-    const readFile = (path: string, id: string | null | undefined) => {
-      return this.api!.readFile(path, id, { repoURL }) as Promise<string>;
-    };
-
-    const files = await entriesByFolder(
-      listFiles,
-      readFile,
-      this.api!.readFileMetadata.bind(this.api),
-      API_NAME,
+    const listed = await this.api!.listFiles(folder, { repoURL, depth });
+    const files = listed.filter(
+      file => (!pathRegex || pathRegex.test(file.path)) && filterByExtension(file, extension),
     );
-    return files;
+
+    return this.readEntries(files, repoURL);
   }
 
   entriesByFiles(files: ImplementationFile[]) {
     const repoURL = this.useOpenAuthoring ? this.api!.originRepoURL : this.api!.repoURL;
 
-    const readFile = (path: string, id: string | null | undefined) =>
-      this.api!.readFile(path, id, { repoURL }).catch(() => '') as Promise<string>;
-
-    return entriesByFiles(files, readFile, this.api!.readFileMetadata.bind(this.api), API_NAME);
+    return this.readEntries(files, repoURL, { ignoreReadErrors: true });
   }
 
   // Fetches a single entry.
@@ -609,17 +606,9 @@ export default class GitHub implements Implementation {
       }
     }
 
-    const readFile = (path: string, id: string | null | undefined) =>
-      this.api!.readFile(path, id, { repoURL: this.api!.originRepoURL }).catch(
-        () => '',
-      ) as Promise<string>;
-
-    const entries = await entriesByFiles(
-      result.files,
-      readFile,
-      this.api!.readFileMetadata.bind(this.api),
-      API_NAME,
-    );
+    const entries = await this.readEntries(result.files, this.api!.originRepoURL, {
+      ignoreReadErrors: true,
+    });
 
     return {
       entries,
