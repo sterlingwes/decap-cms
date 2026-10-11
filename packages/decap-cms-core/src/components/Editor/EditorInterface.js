@@ -28,6 +28,10 @@ const SCROLL_SYNC_ENABLED = 'cms.scroll-sync-enabled';
 const SPLIT_PANE_POSITION = 'cms.split-pane-position';
 const I18N_VISIBLE = 'cms.i18n-visible';
 
+// Below this width there's no room for side-by-side panes, so the editor shows
+// one pane at a time and the preview/notes toggles switch between them.
+const NARROW_QUERY = '(max-width: 799px)';
+
 const styles = {
   splitPane: css`
     ${components.card};
@@ -96,7 +100,6 @@ const NoPreviewContainer = styled.div`
 
 const EditorContainer = styled.div`
   width: 100%;
-  min-width: 800px;
   height: 100%;
   position: absolute;
   top: 0;
@@ -104,12 +107,31 @@ const EditorContainer = styled.div`
   overflow: hidden;
   padding-top: 66px;
   background-color: ${colors.background};
+
+  @media ${NARROW_QUERY} {
+    /* the toolbar can wrap to more than one row here, so stack it in normal
+       flow instead of reserving a fixed 66px for it */
+    display: flex;
+    flex-direction: column;
+    padding-top: 0;
+  }
 `;
 
 const Editor = styled.div`
   height: 100%;
   margin: 0 auto;
   position: relative;
+
+  @media ${NARROW_QUERY} {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+`;
+
+const NarrowPane = styled.div`
+  ${styles.splitPane};
+  display: ${props => (props.hidden ? 'none' : 'block')};
 `;
 
 const PreviewPaneContainer = styled.div`
@@ -122,6 +144,7 @@ const ControlPaneContainer = styled(PreviewPaneContainer)`
   padding: 0 16px;
   position: relative;
   overflow-x: hidden;
+  overscroll-behavior: contain;
 `;
 
 const NotesPaneContainer = styled.div`
@@ -186,6 +209,25 @@ class EditorInterface extends Component {
     notesVisible: localStorage.getItem(NOTES_VISIBLE) !== 'false',
     scrollSyncEnabled: localStorage.getItem(SCROLL_SYNC_ENABLED) !== 'false',
     i18nVisible: localStorage.getItem(I18N_VISIBLE) !== 'false',
+    isNarrow: !!window.matchMedia?.(NARROW_QUERY).matches,
+    narrowPane: 'editor',
+  };
+
+  componentDidMount() {
+    this.narrowQuery = window.matchMedia?.(NARROW_QUERY);
+    this.narrowQuery?.addEventListener?.('change', this.handleNarrowChange);
+  }
+
+  componentWillUnmount() {
+    this.narrowQuery?.removeEventListener?.('change', this.handleNarrowChange);
+  }
+
+  handleNarrowChange = event => {
+    this.setState({ isNarrow: event.matches });
+  };
+
+  toggleNarrowPane = pane => {
+    this.setState(state => ({ narrowPane: state.narrowPane === pane ? 'editor' : pane }));
   };
 
   handleFieldClick = path => {
@@ -215,6 +257,10 @@ class EditorInterface extends Component {
   };
 
   handleTogglePreview = () => {
+    if (this.state.isNarrow) {
+      this.toggleNarrowPane('preview');
+      return;
+    }
     const newPreviewVisible = !this.state.previewVisible;
     this.setState({
       previewVisible: newPreviewVisible,
@@ -225,6 +271,10 @@ class EditorInterface extends Component {
   };
 
   handleToggleNotes = () => {
+    if (this.state.isNarrow) {
+      this.toggleNarrowPane('notes');
+      return;
+    }
     const newNotesVisible = !this.state.notesVisible;
     this.setState({
       notesVisible: newNotesVisible,
@@ -282,13 +332,14 @@ class EditorInterface extends Component {
       currentStatus,
       onLogoutClick,
       loadDeployPreview,
+      loadPublishStatus,
       deployPreview,
       draftKey,
       editorBackLink,
       t,
     } = this.props;
 
-    const { scrollSyncEnabled, showEventBlocker } = this.state;
+    const { scrollSyncEnabled, showEventBlocker, isNarrow, narrowPane } = this.state;
 
     const previewEnabled = isPreviewEnabled(collection, entry);
     const notesEnabled = isNotesEnabled(collection, entry, isNewEntry, isPublished, hasWorkflow);
@@ -328,6 +379,32 @@ class EditorInterface extends Component {
       ? getPreviewEntry(entry, leftPanelLocale, defaultLocale)
       : entry;
 
+    const preview = (
+      <PreviewPaneContainer blockEntry={showEventBlocker}>
+        <EditorPreviewPane
+          collection={collection}
+          entry={previewEntry}
+          fields={fields}
+          fieldsMetaData={fieldsMetaData}
+          locale={leftPanelLocale}
+          onFieldClick={this.handleFieldClick}
+        />
+      </PreviewPaneContainer>
+    );
+
+    const notes = (
+      <NotesPaneContainer blockEntry={showEventBlocker}>
+        <EditorNotesPane
+          notes={this.props.notes}
+          onChange={this.handleNotesChange}
+          entry={entry}
+          collection={collection}
+          user={user}
+          t={t}
+        />
+      </NotesPaneContainer>
+    );
+
     const editorWithPreview = (
       <ScrollSync enabled={this.state.scrollSyncEnabled}>
         <div>
@@ -341,16 +418,7 @@ class EditorInterface extends Component {
             onDragFinished={this.handleSplitPaneDragFinished}
           >
             <ScrollSyncPane>{editor}</ScrollSyncPane>
-            <PreviewPaneContainer blockEntry={showEventBlocker}>
-              <EditorPreviewPane
-                collection={collection}
-                entry={previewEntry}
-                fields={fields}
-                fieldsMetaData={fieldsMetaData}
-                locale={leftPanelLocale}
-                onFieldClick={this.handleFieldClick}
-              />
-            </PreviewPaneContainer>
+            {preview}
           </StyledSplitPane>
         </div>
       </ScrollSync>
@@ -369,16 +437,7 @@ class EditorInterface extends Component {
             onDragFinished={this.handleSplitPaneDragFinished}
           >
             <ScrollSyncPane>{editor}</ScrollSyncPane>
-            <NotesPaneContainer blockEntry={showEventBlocker}>
-              <EditorNotesPane
-                notes={this.props.notes}
-                onChange={this.handleNotesChange}
-                entry={entry}
-                collection={collection}
-                user={user}
-                t={t}
-              />
-            </NotesPaneContainer>
+            {notes}
           </StyledSplitPane>
         </div>
       </ScrollSync>
@@ -405,6 +464,18 @@ class EditorInterface extends Component {
     const previewVisible = previewEnabled && this.state.previewVisible;
     const notesVisible = notesEnabled && this.state.notesVisible;
     const scrollSyncVisible = i18nVisible || previewVisible || notesVisible;
+
+    // On narrow screens only one pane shows at a time. The editor stays mounted
+    // (just hidden) so saving and validation can still reach the control pane.
+    const narrowPreviewActive = previewEnabled && narrowPane === 'preview';
+    const narrowNotesActive = notesEnabled && narrowPane === 'notes';
+    const narrowContent = (
+      <>
+        <NarrowPane hidden={narrowPreviewActive || narrowNotesActive}>{editor}</NarrowPane>
+        {narrowPreviewActive && <NarrowPane>{preview}</NarrowPane>}
+        {narrowNotesActive && <NarrowPane>{notes}</NarrowPane>}
+      </>
+    );
 
     return (
       <EditorContainer>
@@ -437,12 +508,13 @@ class EditorInterface extends Component {
           currentStatus={currentStatus}
           onLogoutClick={onLogoutClick}
           loadDeployPreview={loadDeployPreview}
+          loadPublishStatus={loadPublishStatus}
           deployPreview={deployPreview}
           editorBackLink={editorBackLink}
         />
         <Editor key={draftKey}>
           <ViewControls>
-            {collectionI18nEnabled && (
+            {collectionI18nEnabled && !isNarrow && (
               <EditorToggle
                 isActive={i18nVisible}
                 onClick={this.handleToggleI18n}
@@ -454,7 +526,7 @@ class EditorInterface extends Component {
             )}
             {previewEnabled && (
               <EditorToggle
-                isActive={previewVisible}
+                isActive={isNarrow ? narrowPreviewActive : previewVisible}
                 onClick={this.handleTogglePreview}
                 size="large"
                 type="eye"
@@ -463,14 +535,14 @@ class EditorInterface extends Component {
             )}
             {notesEnabled && (
               <EditorToggle
-                isActive={notesVisible}
+                isActive={isNarrow ? narrowNotesActive : notesVisible}
                 onClick={this.handleToggleNotes}
                 size="large"
                 type="write"
                 title={t('editor.editorInterface.toggleNotes')}
               />
             )}
-            {scrollSyncVisible && !collection.getIn(['editor', 'visualEditing']) && (
+            {scrollSyncVisible && !isNarrow && !collection.getIn(['editor', 'visualEditing']) && (
               <EditorToggle
                 isActive={scrollSyncEnabled}
                 onClick={this.handleToggleScrollSync}
@@ -480,15 +552,19 @@ class EditorInterface extends Component {
               />
             )}
           </ViewControls>
-          <EditorContent
-            i18nVisible={i18nVisible}
-            previewVisible={previewVisible}
-            notesVisible={notesVisible}
-            editor={editor}
-            editorWithEditor={editorWithEditor}
-            editorWithPreview={editorWithPreview}
-            editorWithNotes={editorWithNotes}
-          />
+          {isNarrow ? (
+            narrowContent
+          ) : (
+            <EditorContent
+              i18nVisible={i18nVisible}
+              previewVisible={previewVisible}
+              notesVisible={notesVisible}
+              editor={editor}
+              editorWithEditor={editorWithEditor}
+              editorWithPreview={editorWithPreview}
+              editorWithNotes={editorWithNotes}
+            />
+          )}
         </Editor>
       </EditorContainer>
     );
@@ -524,6 +600,7 @@ EditorInterface.propTypes = {
   onLogoutClick: PropTypes.func.isRequired,
   deployPreview: PropTypes.object,
   loadDeployPreview: PropTypes.func.isRequired,
+  loadPublishStatus: PropTypes.func,
   draftKey: PropTypes.string.isRequired,
   t: PropTypes.func.isRequired,
   notes: ImmutablePropTypes.list,

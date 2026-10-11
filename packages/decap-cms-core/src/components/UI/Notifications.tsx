@@ -5,6 +5,7 @@ import { injectStyle } from 'react-toastify/dist/inject-style';
 import { toast, ToastContainer } from 'react-toastify';
 import { connect, useDispatch } from 'react-redux';
 import { useTranslate } from 'react-polyglot';
+import { css, Global } from '@emotion/react';
 
 import { dismissNotification } from '../../actions/notifications';
 
@@ -13,6 +14,23 @@ import type { State } from '../../types/redux';
 import type { Notification } from '../../reducers/notifications';
 
 injectStyle();
+
+/**
+ * On narrow screens react-toastify stretches the container across the full
+ * width and pins it to the top of the viewport, which covers the app and
+ * editor toolbars (including the back button) until the toast is dismissed.
+ * Anchor it to the bottom instead so navigation stays reachable. The 480px
+ * breakpoint matches react-toastify's own mobile breakpoint.
+ */
+const mobileContainerStyles = css`
+  @media only screen and (max-width: 480px) {
+    .notif__container.Toastify__toast-container--top-right {
+      top: auto;
+      bottom: 0;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+`;
 
 interface Props {
   notifications: Notification[];
@@ -71,6 +89,7 @@ function Notifications({ notifications }: Props) {
 
   return (
     <>
+      <Global styles={mobileContainerStyles} />
       <ToastContainer position="top-right" theme="colored" className="notif__container" />
     </>
   );

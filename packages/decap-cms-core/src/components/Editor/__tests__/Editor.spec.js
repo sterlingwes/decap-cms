@@ -46,6 +46,7 @@ describe('Editor', () => {
     loadEntries: jest.fn(),
     deployPreview: fromJS({}),
     loadDeployPreview: jest.fn(),
+    loadPublishStatus: jest.fn(),
     user: fromJS({}),
     t: jest.fn(key => key),
     localBackup: fromJS({}),

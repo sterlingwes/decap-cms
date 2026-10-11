@@ -56,6 +56,18 @@ export interface Map {
   set: <T>(key: string, value: T) => Map;
 }
 
+/**
+ * Status of the CI run(s) (e.g. GitHub Actions workflows) triggered by the
+ * latest published change to an entry.
+ */
+export type PublishStatus = {
+  state: 'pending' | 'running' | 'success' | 'failure' | 'cancelled';
+  // link to the most relevant run (the failing or still-running one, if any)
+  url?: string;
+  // name of that run's workflow
+  name?: string;
+};
+
 export type DataFile = {
   path: string;
   slug: string;
@@ -266,6 +278,7 @@ export interface Implementation {
     collectionName: string,
     slug: string,
   ) => Promise<{ url: string; status: string } | null>;
+  getPublishStatus?: (path: string) => Promise<PublishStatus | null>;
 
   allEntriesByFolder?: (
     folder: string,

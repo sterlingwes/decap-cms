@@ -82,12 +82,14 @@ import type {
   ChangeType as CT,
   IssueChangeData as ICD,
   IssueChange as IC,
+  PublishStatus as PS,
 } from './implementation';
 import type { AsyncLock as AL } from './asyncLock';
 
 export type AsyncLock = AL;
 export type Implementation = I;
 export type ImplementationEntry = IE;
+export type PublishStatus = PS;
 export type UnpublishedEntryDiff = UED;
 export type UnpublishedEntry = UE;
 export type ImplementationMediaFile = IMF;
