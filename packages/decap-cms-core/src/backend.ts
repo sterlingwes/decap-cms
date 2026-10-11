@@ -1152,6 +1152,18 @@ export class Backend {
   }
 
   /**
+   * Status of the CI run(s) (e.g. a GitHub Actions deploy) triggered by the
+   * latest published change to an entry, for backends that support it.
+   */
+  async getPublishStatus(entry: EntryMap) {
+    const path = entry.get('path');
+    if (!this.implementation.getPublishStatus || !path) {
+      return null;
+    }
+    return this.implementation.getPublishStatus(path);
+  }
+
+  /**
    * Requests a base URL from the backend for previewing a specific entry.
    * Supports polling via `maxAttempts` and `interval` options, as there is
    * often a delay before a preview URL is available.

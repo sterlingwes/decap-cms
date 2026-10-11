@@ -301,6 +301,43 @@ const RefreshPreviewButton = styled.button`
 
 const PreviewLink = RefreshPreviewButton.withComponent('a');
 
+// How often to re-check a publish's CI run while it's pending or running
+const PUBLISH_STATUS_POLL_INTERVAL = 10000;
+
+const publishStatusStyles = {
+  pending: { color: colors.infoText, icon: 'refresh', spinning: true },
+  running: { color: colors.infoText, icon: 'refresh', spinning: true },
+  success: { color: colors.successText, icon: 'check' },
+  failure: { color: colors.errorText, icon: 'info-circle' },
+  cancelled: { color: colors.controlLabel, icon: 'close' },
+};
+
+const PublishStatusLink = styled.a`
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+  white-space: nowrap;
+  color: ${props => props.$color};
+
+  span {
+    margin-right: 6px;
+  }
+
+  ${Icon} {
+    color: ${props => props.$color};
+    ${props => props.$spinning && `animation: spin 1s linear infinite;`}
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+`;
+
 const PublishDropDownItem = styled(DropdownItem)`
   min-width: initial;
 `;
@@ -342,6 +379,7 @@ export class EditorToolbar extends React.Component {
     onLogoutClick: PropTypes.func.isRequired,
     deployPreview: PropTypes.object,
     loadDeployPreview: PropTypes.func.isRequired,
+    loadPublishStatus: PropTypes.func,
     t: PropTypes.func.isRequired,
     editorBackLink: PropTypes.string.isRequired,
   };
@@ -358,11 +396,21 @@ export class EditorToolbar extends React.Component {
       // polling trigger — not componentDidUpdate.
       this._pollController = new AbortController();
       loadDeployPreview({ maxAttempts: 24, signal: this._pollController.signal });
+      this.loadPublishStatus();
     }
   }
 
   componentDidUpdate(prevProps) {
-    const { isNewEntry, isPersisting, loadDeployPreview } = this.props;
+    const { isNewEntry, isPersisting, isPublishing, hasWorkflow, loadDeployPreview } = this.props;
+
+    // Publishing (or saving, which publishes without the editorial workflow)
+    // kicks off a new CI run, so start checking for it.
+    const finishedPublishing = prevProps.isPublishing && !isPublishing;
+    const finishedSimplePublish = !hasWorkflow && prevProps.isPersisting && !isPersisting;
+    if (!isNewEntry && (finishedPublishing || finishedSimplePublish)) {
+      this.loadPublishStatus();
+    }
+
     if (!isNewEntry && prevProps.isPersisting && !isPersisting) {
       // Abort any in-flight poll before starting a new one.
       this._pollController?.abort();
@@ -376,7 +424,56 @@ export class EditorToolbar extends React.Component {
 
   componentWillUnmount() {
     this._pollController?.abort();
+    this._unmounted = true;
+    clearTimeout(this._publishStatusTimer);
   }
+
+  state = { publishStatus: null };
+
+  loadPublishStatus = async () => {
+    const { loadPublishStatus } = this.props;
+    if (!loadPublishStatus) {
+      return;
+    }
+    clearTimeout(this._publishStatusTimer);
+    // ignore responses from requests that a newer one has superseded
+    const request = (this._publishStatusRequest || 0) + 1;
+    this._publishStatusRequest = request;
+
+    const publishStatus = await loadPublishStatus();
+    if (this._unmounted || request !== this._publishStatusRequest) {
+      return;
+    }
+    this.setState({ publishStatus });
+    if (publishStatus && ['pending', 'running'].includes(publishStatus.state)) {
+      this._publishStatusTimer = setTimeout(this.loadPublishStatus, PUBLISH_STATUS_POLL_INTERVAL);
+    }
+  };
+
+  renderPublishStatus = () => {
+    const { publishStatus } = this.state;
+    const { t } = this.props;
+    if (!publishStatus) {
+      return null;
+    }
+
+    const { state, url, name } = publishStatus;
+    const { color, icon, spinning } = publishStatusStyles[state];
+    const label = t(`editor.editorToolbar.publishStatus.${state}`);
+    return (
+      <PublishStatusLink
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={name ? `${name}: ${label}` : label}
+        $color={color}
+        $spinning={spinning}
+      >
+        <span>{label}</span>
+        <Icon type={icon} size="xsmall" />
+      </PublishStatusLink>
+    );
+  };
 
   renderSimpleControls = () => {
     const { collection, hasChanged, isNewEntry, showDelete, onDelete, t } = this.props;
@@ -757,6 +854,7 @@ export class EditorToolbar extends React.Component {
             {hasWorkflow ? this.renderWorkflowControls() : this.renderSimpleControls()}
           </ToolbarSubSectionFirst>
           <ToolbarSubSectionLast>
+            {this.renderPublishStatus()}
             {hasWorkflow
               ? this.renderWorkflowDeployPreviewControls()
               : this.renderSimpleDeployPreviewControls()}

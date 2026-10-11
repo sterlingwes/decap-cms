@@ -842,4 +842,143 @@ describe('github API', () => {
     expect(api.request).toHaveBeenCalledTimes(1);
     expect(api.request).toHaveBeenCalledWith(`/repos/repo/commits/${sha}/status`);
   });
+
+  describe('getPublishStatus', () => {
+    const now = new Date().toISOString();
+
+    function mockRequests(api, { commits, pulls = [], runs = {}, branchRuns = [] }) {
+      api.request = jest.fn((path, options = {}) => {
+        if (path === '/repos/owner/repo/commits') {
+          return Promise.resolve(commits);
+        }
+        if (path.endsWith('/pulls')) {
+          return Promise.resolve(pulls);
+        }
+        if (path === '/repos/owner/repo/actions/runs') {
+          const { head_sha: headSha } = options.params;
+          return Promise.resolve({
+            workflow_runs: headSha ? runs[headSha] || [] : branchRuns,
+          });
+        }
+        return Promise.reject(new Error(`unexpected request ${path}`));
+      });
+    }
+
+    const commit = { sha: 'file-commit', commit: { committer: { date: now } } };
+
+    it('should return null when the file has no commits on the branch', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockRequests(api, { commits: [] });
+
+      await expect(api.getPublishStatus('posts/new.md')).resolves.toBeNull();
+      expect(api.request).toHaveBeenCalledWith('/repos/owner/repo/commits', {
+        params: { path: 'posts/new.md', sha: 'main', per_page: 1 },
+      });
+    });
+
+    it('should use the merge commit of the PR that published the change', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockRequests(api, {
+        commits: [commit],
+        pulls: [
+          { merged_at: null, base: { ref: 'main' }, merge_commit_sha: 'unmerged' },
+          { merged_at: now, base: { ref: 'main' }, merge_commit_sha: 'merge-commit' },
+        ],
+        runs: {
+          'merge-commit': [
+            { name: 'Deploy', status: 'in_progress', conclusion: null, html_url: 'run-url' },
+          ],
+        },
+      });
+
+      await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+        state: 'running',
+        url: 'run-url',
+        name: 'Deploy',
+      });
+      expect(api.request).toHaveBeenCalledWith('/repos/owner/repo/commits/file-commit/pulls');
+    });
+
+    it('should use the commit itself when it was pushed directly', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockRequests(api, {
+        commits: [commit],
+        runs: {
+          'file-commit': [
+            { name: 'Deploy', status: 'completed', conclusion: 'failure', html_url: 'run-url' },
+          ],
+        },
+      });
+
+      await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+        state: 'failure',
+        url: 'run-url',
+        name: 'Deploy',
+      });
+    });
+
+    it('should ignore runs that were not triggered by the publishing push', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockRequests(api, {
+        commits: [commit],
+        runs: {
+          'file-commit': [
+            {
+              name: 'npm_and_yarn in /. for qs - Update',
+              event: 'dynamic',
+              status: 'completed',
+              conclusion: 'failure',
+              html_url: 'dependabot-url',
+            },
+            {
+              name: 'Deploy',
+              event: 'push',
+              status: 'completed',
+              conclusion: 'success',
+              html_url: 'deploy-url',
+            },
+          ],
+        },
+      });
+
+      await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+        state: 'success',
+        url: 'deploy-url',
+        name: 'Deploy',
+      });
+    });
+
+    it('should follow the newer run when the publish run was cancelled', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      const cancelled = {
+        name: 'Deploy',
+        status: 'completed',
+        conclusion: 'cancelled',
+        head_sha: 'file-commit',
+        html_url: 'cancelled-url',
+        created_at: '2026-01-01T00:00:00Z',
+      };
+      mockRequests(api, {
+        commits: [commit],
+        runs: { 'file-commit': [cancelled] },
+        branchRuns: [
+          {
+            name: 'Deploy',
+            status: 'completed',
+            conclusion: 'success',
+            head_sha: 'newer',
+            html_url: 'newer-url',
+            created_at: '2026-01-01T00:01:00Z',
+          },
+          cancelled,
+        ],
+      });
+
+      await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+        state: 'success',
+        url: 'newer-url',
+        name: 'Deploy',
+      });
+    });
+  });
 });

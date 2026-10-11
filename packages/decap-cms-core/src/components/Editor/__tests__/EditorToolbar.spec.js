@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react';
+import { render, act } from '@testing-library/react';
 import { fromJS } from 'immutable';
 
 import { EditorToolbar } from '../EditorToolbar';
@@ -161,6 +161,110 @@ describe('EditorToolbar', () => {
       expect(firstSignal.aborted).toBe(true);
       const secondSignal = props.loadDeployPreview.mock.calls[1][0].signal;
       expect(secondSignal.aborted).toBe(false);
+    });
+  });
+
+  describe('publish status', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should load the publish status on mount for existing entries', async () => {
+      const loadPublishStatus = jest.fn().mockResolvedValue({
+        state: 'failure',
+        url: 'https://github.com/owner/repo/actions/runs/1',
+        name: 'Deploy',
+      });
+      const { findByText } = render(
+        <EditorToolbar {...props} loadPublishStatus={loadPublishStatus} />,
+      );
+
+      const label = await findByText('editor.editorToolbar.publishStatus.failure');
+      expect(loadPublishStatus).toHaveBeenCalledTimes(1);
+      expect(label.closest('a')).toHaveAttribute(
+        'href',
+        'https://github.com/owner/repo/actions/runs/1',
+      );
+      expect(label.closest('a')).toHaveAttribute(
+        'title',
+        'Deploy: editor.editorToolbar.publishStatus.failure',
+      );
+    });
+
+    it('should not load the publish status for new entries', () => {
+      const loadPublishStatus = jest.fn().mockResolvedValue(null);
+      render(<EditorToolbar {...props} isNewEntry={true} loadPublishStatus={loadPublishStatus} />);
+      expect(loadPublishStatus).not.toHaveBeenCalled();
+    });
+
+    it('should render nothing when there is no status', async () => {
+      const loadPublishStatus = jest.fn().mockResolvedValue(null);
+      const { queryByText } = render(
+        <EditorToolbar {...props} loadPublishStatus={loadPublishStatus} />,
+      );
+      await act(() => Promise.resolve());
+      expect(queryByText(/publishStatus/)).not.toBeInTheDocument();
+    });
+
+    it('should keep polling while the run is in progress and stop once it finishes', async () => {
+      jest.useFakeTimers();
+      const loadPublishStatus = jest
+        .fn()
+        .mockResolvedValueOnce({ state: 'running', url: 'run-url' })
+        .mockResolvedValueOnce({ state: 'success', url: 'run-url' });
+      const { findByText } = render(
+        <EditorToolbar {...props} loadPublishStatus={loadPublishStatus} />,
+      );
+
+      await findByText('editor.editorToolbar.publishStatus.running');
+      await act(async () => {
+        jest.advanceTimersByTime(10000);
+      });
+      await findByText('editor.editorToolbar.publishStatus.success');
+      expect(loadPublishStatus).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        jest.advanceTimersByTime(30000);
+      });
+      expect(loadPublishStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it('should reload the status after an entry is published', async () => {
+      const loadPublishStatus = jest.fn().mockResolvedValue(null);
+      const { rerender } = render(
+        <EditorToolbar
+          {...props}
+          hasWorkflow={true}
+          isPublishing={true}
+          loadPublishStatus={loadPublishStatus}
+        />,
+      );
+      await act(() => Promise.resolve());
+      loadPublishStatus.mockClear();
+
+      rerender(
+        <EditorToolbar
+          {...props}
+          hasWorkflow={true}
+          isPublishing={false}
+          loadPublishStatus={loadPublishStatus}
+        />,
+      );
+      await act(() => Promise.resolve());
+      expect(loadPublishStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('should stop polling on unmount', async () => {
+      jest.useFakeTimers();
+      const loadPublishStatus = jest.fn().mockResolvedValue({ state: 'running' });
+      const { findByText, unmount } = render(
+        <EditorToolbar {...props} loadPublishStatus={loadPublishStatus} />,
+      );
+      await findByText('editor.editorToolbar.publishStatus.running');
+      unmount();
+
+      jest.advanceTimersByTime(30000);
+      expect(loadPublishStatus).toHaveBeenCalledTimes(1);
     });
   });
 });

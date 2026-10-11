@@ -332,6 +332,7 @@ class EditorInterface extends Component {
       currentStatus,
       onLogoutClick,
       loadDeployPreview,
+      loadPublishStatus,
       deployPreview,
       draftKey,
       editorBackLink,
@@ -507,6 +508,7 @@ class EditorInterface extends Component {
           currentStatus={currentStatus}
           onLogoutClick={onLogoutClick}
           loadDeployPreview={loadDeployPreview}
+          loadPublishStatus={loadPublishStatus}
           deployPreview={deployPreview}
           editorBackLink={editorBackLink}
         />
@@ -598,6 +600,7 @@ EditorInterface.propTypes = {
   onLogoutClick: PropTypes.func.isRequired,
   deployPreview: PropTypes.object,
   loadDeployPreview: PropTypes.func.isRequired,
+  loadPublishStatus: PropTypes.func,
   draftKey: PropTypes.string.isRequired,
   t: PropTypes.func.isRequired,
   notes: ImmutablePropTypes.list,
