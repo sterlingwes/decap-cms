@@ -20,6 +20,9 @@ import {
 import { status } from '../../constants/publishModes';
 import { SettingsDropdown } from '../UI';
 
+// Matches the editor's narrow (single pane) layout in EditorInterface
+const NARROW_QUERY = '(max-width: 799px)';
+
 const styles = {
   noOverflow: css`
     overflow: hidden;
@@ -89,12 +92,20 @@ const ToolbarContainer = styled.div`
   top: 0;
   left: 0;
   width: 100%;
-  min-width: 800px;
   z-index: ${zIndex.zIndex300};
   background-color: #fff;
   height: 66px;
   display: flex;
   justify-content: space-between;
+
+  @media ${NARROW_QUERY} {
+    /* EditorInterface stacks the toolbar in normal flow on narrow screens so
+       it can grow when the controls wrap onto a second row */
+    position: relative;
+    flex: none;
+    height: auto;
+    min-height: 66px;
+  }
 `;
 
 const ToolbarSectionMain = styled.div`
@@ -103,11 +114,22 @@ const ToolbarSectionMain = styled.div`
   display: flex;
   justify-content: space-between;
   padding: 0 10px;
+
+  @media ${NARROW_QUERY} {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 6px 4px;
+  }
 `;
 
 const ToolbarSubSectionFirst = styled.div`
   display: flex;
   align-items: center;
+
+  @media ${NARROW_QUERY} {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
 `;
 
 const ToolbarSubSectionLast = styled(ToolbarSubSectionFirst)`
@@ -124,16 +146,29 @@ const ToolbarSectionBackLink = styled(Link)`
   &:focus {
     background-color: #f1f2f4;
   }
+
+  @media ${NARROW_QUERY} {
+    height: auto;
+    padding: 0 14px;
+  }
 `;
 
 const ToolbarSectionMeta = styled.div`
   ${styles.toolbarSection};
   border-left-width: 1px;
   padding: 0 7px;
+
+  @media ${NARROW_QUERY} {
+    display: none;
+  }
 `;
 
 const ToolbarDropdown = styled(Dropdown)`
   ${styles.buttonMargin};
+
+  @media ${NARROW_QUERY} {
+    margin: 0 4px;
+  }
 
   ${Icon} {
     color: ${colorsRaw.teal};
@@ -145,6 +180,16 @@ const BackArrow = styled.div`
   font-size: 21px;
   font-weight: 600;
   margin-right: 16px;
+
+  @media ${NARROW_QUERY} {
+    margin-right: 0;
+  }
+`;
+
+const BackText = styled.div`
+  @media ${NARROW_QUERY} {
+    display: none;
+  }
 `;
 
 const BackCollection = styled.div`
@@ -173,6 +218,10 @@ const ToolbarButton = styled.button`
 
   @media (max-width: 1200px) {
     padding: 0 10px;
+  }
+
+  @media ${NARROW_QUERY} {
+    margin: 0 4px;
   }
 `;
 
@@ -690,7 +739,7 @@ export class EditorToolbar extends React.Component {
       <ToolbarContainer>
         <ToolbarSectionBackLink to={editorBackLink}>
           <BackArrow>←</BackArrow>
-          <div>
+          <BackText>
             <BackCollection>
               {t('editor.editorToolbar.backCollection', {
                 collectionLabel: collection.get('label'),
@@ -701,7 +750,7 @@ export class EditorToolbar extends React.Component {
             ) : (
               <BackStatusUnchanged>{t('editor.editorToolbar.changesSaved')}</BackStatusUnchanged>
             )}
-          </div>
+          </BackText>
         </ToolbarSectionBackLink>
         <ToolbarSectionMain>
           <ToolbarSubSectionFirst>
