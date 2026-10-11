@@ -190,10 +190,15 @@ describe('github backend implementation', () => {
     const readFile = jest.fn();
     const readFileMetadata = jest.fn(() => Promise.resolve({ author: '', updatedOn: '' }));
 
+    const readFilesBatch = jest.fn(() => Promise.resolve(new Map()));
+    const readFilesMetadataBatch = jest.fn(() => Promise.resolve(new Map()));
+
     const mockAPI = {
       listFiles,
       readFile,
       readFileMetadata,
+      readFilesBatch,
+      readFilesMetadataBatch,
       originRepoURL: 'originRepoURL',
     };
 
@@ -233,6 +238,38 @@ describe('github backend implementation', () => {
       expect(listFiles).toHaveBeenCalledWith('posts', { depth: 1, repoURL: 'originRepoURL' });
       expect(readFile).toHaveBeenCalledTimes(20);
     });
+
+    it('should use batched reads and only fall back to per-file requests for misses', async () => {
+      const gitHubImplementation = new GitHubImplementation(config);
+      gitHubImplementation.api = mockAPI;
+
+      const files = [
+        { id: 'sha-a', path: 'posts/a.md' },
+        { id: 'sha-b', path: 'posts/b.md' },
+      ];
+      listFiles.mockResolvedValue(files);
+      readFile.mockResolvedValue('from rest');
+      readFilesBatch.mockResolvedValue(new Map([['sha-a', 'from batch']]));
+      readFilesMetadataBatch.mockResolvedValue(
+        new Map([['posts/a.md', { author: 'Ada', updatedOn: '2026-01-01T00:00:00Z' }]]),
+      );
+
+      const result = await gitHubImplementation.entriesByFolder('posts', 'md', 1);
+
+      expect(readFilesBatch).toHaveBeenCalledWith(files, { repoURL: 'originRepoURL' });
+      expect(readFilesMetadataBatch).toHaveBeenCalledWith(files);
+      expect(readFile).toHaveBeenCalledTimes(1);
+      expect(readFile).toHaveBeenCalledWith('posts/b.md', 'sha-b', { repoURL: 'originRepoURL' });
+      expect(readFileMetadata).toHaveBeenCalledTimes(1);
+      expect(readFileMetadata).toHaveBeenCalledWith('posts/b.md', 'sha-b');
+      expect([...result]).toEqual([
+        {
+          data: 'from batch',
+          file: { ...files[0], author: 'Ada', updatedOn: '2026-01-01T00:00:00Z' },
+        },
+        { data: 'from rest', file: { ...files[1], author: '', updatedOn: '' } },
+      ]);
+    });
   });
 
   describe('traverseCursor', () => {
@@ -245,6 +282,8 @@ describe('github backend implementation', () => {
       readFile,
       originRepoURL: 'originRepoURL',
       readFileMetadata,
+      readFilesBatch: jest.fn(() => Promise.resolve(new Map())),
+      readFilesMetadataBatch: jest.fn(() => Promise.resolve(new Map())),
     };
 
     const files = [];

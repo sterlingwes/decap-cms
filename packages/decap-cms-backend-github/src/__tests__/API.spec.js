@@ -1,4 +1,5 @@
 import { Base64 } from 'js-base64';
+import { localForage } from 'decap-cms-lib-util';
 
 import API from '../API';
 
@@ -841,6 +842,121 @@ describe('github API', () => {
     expect(api.getBranchPullRequest).toHaveBeenCalledWith('cms/collection/slug');
     expect(api.request).toHaveBeenCalledTimes(1);
     expect(api.request).toHaveBeenCalledWith(`/repos/repo/commits/${sha}/status`);
+  });
+
+  describe('batched reads', () => {
+    function mockCache(entries = {}) {
+      jest.spyOn(localForage, 'getItem').mockImplementation(key => Promise.resolve(entries[key]));
+      jest.spyOn(localForage, 'setItem').mockResolvedValue();
+    }
+
+    it('readFilesBatch should query uncached blobs in one GraphQL request', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockCache({ 'gh.sha-cached': 'cached content' });
+      api.request = jest.fn().mockResolvedValue({
+        data: {
+          repository: {
+            f0: { text: 'post a', isBinary: false, isTruncated: false },
+            f1: { text: null, isBinary: true, isTruncated: false },
+          },
+        },
+      });
+
+      const result = await api.readFilesBatch([
+        { id: 'sha-cached' },
+        { id: 'sha-a' },
+        { id: 'sha-binary' },
+      ]);
+
+      expect(api.request).toHaveBeenCalledTimes(1);
+      const [path, options] = api.request.mock.calls[0];
+      expect(path).toBe('/graphql');
+      expect(JSON.parse(options.body).variables).toEqual({
+        owner: 'owner',
+        name: 'repo',
+        o0: 'sha-a',
+        o1: 'sha-binary',
+      });
+      expect(result).toEqual(
+        new Map([
+          ['sha-cached', 'cached content'],
+          ['sha-a', 'post a'],
+        ]),
+      );
+      expect(localForage.setItem).toHaveBeenCalledWith('gh.sha-a', 'post a');
+    });
+
+    it('readFilesBatch should split large reads into chunks of 50', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockCache();
+      api.request = jest.fn().mockResolvedValue({ data: { repository: {} } });
+
+      const files = Array.from({ length: 120 }, (_, i) => ({ id: `sha-${i}` }));
+      await api.readFilesBatch(files);
+
+      expect(api.request).toHaveBeenCalledTimes(3);
+    });
+
+    it('readFilesBatch should leave files out when the query fails', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockCache();
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      api.request = jest.fn().mockResolvedValue({ errors: [{ message: 'Bad credentials' }] });
+
+      await expect(api.readFilesBatch([{ id: 'sha-a' }])).resolves.toEqual(new Map());
+    });
+
+    it('readFilesMetadataBatch should map the latest commit author to each path', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      mockCache();
+      api.request = jest.fn().mockResolvedValue({
+        data: {
+          repository: {
+            object: {
+              f0: { nodes: [{ author: { name: 'Ada', date: '2026-01-01T00:00:00Z' } }] },
+              f1: {
+                nodes: [
+                  {
+                    author: {
+                      name: '',
+                      email: 'bob@example.com',
+                      date: '2026-01-01T02:00:00+02:00',
+                    },
+                  },
+                ],
+              },
+              f2: { nodes: [] },
+            },
+          },
+        },
+      });
+
+      const result = await api.readFilesMetadataBatch([
+        { path: 'posts/a.md', id: 'sha-a' },
+        { path: 'posts/b.md', id: 'sha-b' },
+        { path: 'posts/c.md', id: 'sha-c' },
+      ]);
+
+      expect(JSON.parse(api.request.mock.calls[0][1].body).variables).toEqual({
+        owner: 'owner',
+        name: 'repo',
+        expression: 'main',
+        p0: 'posts/a.md',
+        p1: 'posts/b.md',
+        p2: 'posts/c.md',
+      });
+      expect(result).toEqual(
+        new Map([
+          ['posts/a.md', { author: 'Ada', updatedOn: '2026-01-01T00:00:00Z' }],
+          ['posts/b.md', { author: 'bob@example.com', updatedOn: '2026-01-01T00:00:00Z' }],
+          ['posts/c.md', { author: '', updatedOn: '' }],
+        ]),
+      );
+      expect(localForage.setItem).toHaveBeenCalledWith('gh.sha-a.meta', {
+        author: 'Ada',
+        updatedOn: '2026-01-01T00:00:00Z',
+      });
+    });
   });
 
   describe('getPublishStatus', () => {
