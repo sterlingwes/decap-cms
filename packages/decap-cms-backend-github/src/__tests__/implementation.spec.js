@@ -431,6 +431,9 @@ describe('github backend implementation', () => {
         const gitHubImplementation = new GitHubImplementation(configWithNotes);
         gitHubImplementation.api = mockAPI;
 
+        gitHubImplementation.token = 'test-token';
+        gitHubImplementation.currentUser = jest.fn().mockResolvedValue({ login: 'user1' });
+
         const mockNotes = [
           {
             id: '1',
@@ -450,6 +453,7 @@ describe('github backend implementation', () => {
           {
             ...mockNotes[0],
             entrySlug: 'my-post',
+            isOwn: true,
           },
         ]);
         expect(mockAPI.getEntryNotes).toHaveBeenCalledWith('posts', 'my-post');
@@ -489,9 +493,13 @@ describe('github backend implementation', () => {
           commentId: 'comment-123',
           issueUrl: 'https://github.com/owner/repo/issues/1',
         });
-        mockAPI.readFile.mockResolvedValue('title: My Post Title\n\nContent');
 
-        const result = await gitHubImplementation.addNote('posts', 'my-post', noteData);
+        const result = await gitHubImplementation.addNote(
+          'posts',
+          'my-post',
+          noteData,
+          'My Post Title',
+        );
 
         expect(result).toMatchObject({
           text: 'New note',
@@ -510,9 +518,15 @@ describe('github backend implementation', () => {
           }),
           'My Post Title',
         );
+        // The title arrives from the caller; nothing is read back from the repo.
+        expect(mockAPI.readFile).not.toHaveBeenCalled();
       });
 
-      it('should handle missing entry title gracefully', async () => {
+      // The caller cannot always name the entry — a note added from outside the
+      // open editor has no draft to read a title off — so the thread falls back
+      // to `collection/slug`, which is what it always did when the (broken)
+      // lookup failed.
+      it('passes no title through when the caller has none', async () => {
         const gitHubImplementation = new GitHubImplementation(config);
         gitHubImplementation.api = mockAPI;
         gitHubImplementation.token = 'test-token';
@@ -530,7 +544,6 @@ describe('github backend implementation', () => {
           commentId: 'comment-123',
           issueUrl: 'https://github.com/owner/repo/issues/1',
         });
-        mockAPI.readFile.mockRejectedValue(new Error('Not found'));
 
         const result = await gitHubImplementation.addNote('posts', 'my-post', noteData);
 
@@ -548,6 +561,8 @@ describe('github backend implementation', () => {
       it('should update an existing note', async () => {
         const gitHubImplementation = new GitHubImplementation(config);
         gitHubImplementation.api = mockAPI;
+        gitHubImplementation.token = 'test-token';
+        gitHubImplementation.currentUser = jest.fn().mockResolvedValue({ login: 'user1' });
 
         const existingNotes = [
           {
@@ -571,6 +586,7 @@ describe('github backend implementation', () => {
           ...existingNotes[0],
           text: 'Updated text',
           resolved: true,
+          isOwn: true,
         });
         expect(mockAPI.updateEntryNote).toHaveBeenCalledWith('note-1', result);
       });
@@ -753,15 +769,37 @@ describe('github backend implementation', () => {
           onChange: jest.fn(),
         };
 
+        gitHubImplementation.token = 'test-token';
+        gitHubImplementation.currentUser = jest.fn().mockResolvedValue({ login: 'user1' });
+
         await gitHubImplementation.startNotesPolling('posts', 'my-post', callbacks);
 
         expect(gitHubImplementation.pollingManager.watchIssueWithRetry).toHaveBeenCalledWith(
           'posts',
           'my-post',
-          callbacks,
+          expect.objectContaining({
+            onUpdate: callbacks.onUpdate,
+            onChange: callbacks.onChange,
+            prepareNotes: expect.any(Function),
+          }),
           5,
           2000,
         );
+
+        // The polling manager rebuilds notes from the issue's comments, so they
+        // arrive with no ownership flag. Without prepareNotes a poll would strip
+        // Edit/Resolve/Delete off the editor's own notes ~15s after they show.
+        const [, , passedCallbacks] =
+          gitHubImplementation.pollingManager.watchIssueWithRetry.mock.calls[0];
+        const prepared = await passedCallbacks.prepareNotes([
+          { id: '1', author: 'user1', content: 'mine', resolved: false },
+          { id: '2', author: 'someone-else', content: 'theirs', resolved: false },
+        ]);
+
+        expect(prepared).toEqual([
+          expect.objectContaining({ id: '1', isOwn: true }),
+          expect.objectContaining({ id: '2', isOwn: false }),
+        ]);
       });
 
       it('should not start polling if already watching same entry', async () => {
@@ -835,10 +873,16 @@ describe('github backend implementation', () => {
 
         await gitHubImplementation.startNotesPolling('posts', 'my-post', callbacks);
 
+        // The callbacks are passed straight through; prepareNotes is added so
+        // polled notes get the same ownership flag getNotes applies.
         expect(gitHubImplementation.pollingManager.watchIssueWithRetry).toHaveBeenCalledWith(
           'posts',
           'my-post',
-          callbacks,
+          expect.objectContaining({
+            onUpdate: callbacks.onUpdate,
+            onChange: callbacks.onChange,
+            prepareNotes: expect.any(Function),
+          }),
           5,
           2000,
         );

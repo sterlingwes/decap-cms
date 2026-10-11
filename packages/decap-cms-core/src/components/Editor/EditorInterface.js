@@ -1,5 +1,5 @@
 import PropTypes from 'prop-types';
-import React, { Component } from 'react';
+import { Component } from 'react';
 import ImmutablePropTypes from 'react-immutable-proptypes';
 import { css, Global } from '@emotion/react';
 import styled from '@emotion/styled';
@@ -22,11 +22,31 @@ import { hasI18n, getI18nInfo, getPreviewEntry } from '../../lib/i18n';
 import { FILES } from '../../constants/collectionTypes';
 import { getFileFromSlug } from '../../reducers/collections';
 
-const PREVIEW_VISIBLE = 'cms.preview-visible';
-const NOTES_VISIBLE = 'cms.notes-visible';
 const SCROLL_SYNC_ENABLED = 'cms.scroll-sync-enabled';
 const SPLIT_PANE_POSITION = 'cms.split-pane-position';
-const I18N_VISIBLE = 'cms.i18n-visible';
+const RIGHT_PANE = 'cms.right-pane';
+const PANE_ORDER = ['i18n', 'notes', 'preview'];
+const NO_PANE = 'none';
+
+export function storedPanePreference() {
+  return localStorage.getItem(RIGHT_PANE) || PANE_ORDER[0];
+}
+
+/**
+ * `preferred` is what the editor asked for; `available` is what this entry can
+ * actually offer (notes need a saved entry, i18n needs a second locale, preview
+ * can be switched off per collection). A preference for a pane this entry does
+ * not have falls through to the next one rather than leaving the slot empty.
+ */
+export function resolveRightPane(preferred, available) {
+  if (preferred === NO_PANE) {
+    return null;
+  }
+  if (preferred && available[preferred]) {
+    return preferred;
+  }
+  return PANE_ORDER.find(pane => available[pane]) ?? null;
+}
 
 // Below this width there's no room for side-by-side panes, so the editor shows
 // one pane at a time and the preview/notes toggles switch between them.
@@ -161,22 +181,21 @@ const ViewControls = styled.div`
 `;
 
 function EditorContent({
-  i18nVisible,
-  previewVisible,
-  notesVisible,
+  rightPane,
   editor,
   editorWithEditor,
   editorWithPreview,
   editorWithNotes,
 }) {
-  if (i18nVisible) {
-    return editorWithEditor;
-  } else if (notesVisible) {
-    return editorWithNotes;
-  } else if (previewVisible) {
-    return editorWithPreview;
-  } else {
-    return <NoPreviewContainer>{editor}</NoPreviewContainer>;
+  switch (rightPane) {
+    case 'i18n':
+      return editorWithEditor;
+    case 'notes':
+      return editorWithNotes;
+    case 'preview':
+      return editorWithPreview;
+    default:
+      return <NoPreviewContainer>{editor}</NoPreviewContainer>;
   }
 }
 
@@ -189,7 +208,7 @@ function isPreviewEnabled(collection, entry) {
   return collection.getIn(['editor', 'preview'], true);
 }
 
-function isNotesEnabled(collection, entry, isNewEntry, isPublished, hasWorkflow) {
+export function isNotesEnabled(collection, entry, isNewEntry, isPublished, hasWorkflow) {
   if (isNewEntry || !hasWorkflow) {
     return false;
   }
@@ -205,10 +224,8 @@ function isNotesEnabled(collection, entry, isNewEntry, isPublished, hasWorkflow)
 class EditorInterface extends Component {
   state = {
     showEventBlocker: false,
-    previewVisible: localStorage.getItem(PREVIEW_VISIBLE) !== 'false',
-    notesVisible: localStorage.getItem(NOTES_VISIBLE) !== 'false',
+    rightPane: storedPanePreference(),
     scrollSyncEnabled: localStorage.getItem(SCROLL_SYNC_ENABLED) !== 'false',
-    i18nVisible: localStorage.getItem(I18N_VISIBLE) !== 'false',
     isNarrow: !!window.matchMedia?.(NARROW_QUERY).matches,
     narrowPane: 'editor',
   };
@@ -256,32 +273,19 @@ class EditorInterface extends Component {
     this.props.onPublish({ createNew, duplicate });
   };
 
-  handleTogglePreview = () => {
+  /**
+   * Takes the pane that is actually showing, not the stored preference: the two
+   * differ when the preference names a pane this entry cannot offer, and a
+   * toggle must act on what the editor can see.
+   */
+  handleTogglePane = (pane, showing) => {
     if (this.state.isNarrow) {
-      this.toggleNarrowPane('preview');
+      this.toggleNarrowPane(pane);
       return;
     }
-    const newPreviewVisible = !this.state.previewVisible;
-    this.setState({
-      previewVisible: newPreviewVisible,
-      notesVisible: false, // Hide notes when showing preview
-    });
-    localStorage.setItem(PREVIEW_VISIBLE, newPreviewVisible);
-    localStorage.setItem(NOTES_VISIBLE, 'false');
-  };
-
-  handleToggleNotes = () => {
-    if (this.state.isNarrow) {
-      this.toggleNarrowPane('notes');
-      return;
-    }
-    const newNotesVisible = !this.state.notesVisible;
-    this.setState({
-      notesVisible: newNotesVisible,
-      previewVisible: false, // Hide preview when showing notes
-    });
-    localStorage.setItem(NOTES_VISIBLE, newNotesVisible);
-    localStorage.setItem(PREVIEW_VISIBLE, 'false');
+    const next = showing === pane ? NO_PANE : pane;
+    this.setState({ rightPane: next });
+    localStorage.setItem(RIGHT_PANE, next);
   };
 
   handleNotesChange = (action, payload) => {
@@ -292,12 +296,6 @@ class EditorInterface extends Component {
     const newScrollSyncEnabled = !this.state.scrollSyncEnabled;
     this.setState({ scrollSyncEnabled: newScrollSyncEnabled });
     localStorage.setItem(SCROLL_SYNC_ENABLED, newScrollSyncEnabled);
-  };
-
-  handleToggleI18n = () => {
-    const newI18nVisible = !this.state.i18nVisible;
-    this.setState({ i18nVisible: newI18nVisible });
-    localStorage.setItem(I18N_VISIBLE, newI18nVisible);
   };
 
   handleLeftPanelLocaleChange = locale => {
@@ -322,6 +320,7 @@ class EditorInterface extends Component {
       onValidate,
       user,
       hasChanged,
+      canCreateNewEntry,
       displayUrl,
       hasWorkflow,
       useOpenAuthoring,
@@ -460,10 +459,12 @@ class EditorInterface extends Component {
       </ScrollSync>
     );
 
-    const i18nVisible = collectionI18nEnabled && this.state.i18nVisible;
-    const previewVisible = previewEnabled && this.state.previewVisible;
-    const notesVisible = notesEnabled && this.state.notesVisible;
-    const scrollSyncVisible = i18nVisible || previewVisible || notesVisible;
+    const rightPane = resolveRightPane(this.state.rightPane, {
+      i18n: collectionI18nEnabled,
+      notes: notesEnabled,
+      preview: previewEnabled,
+    });
+    const scrollSyncVisible = rightPane !== null;
 
     // On narrow screens only one pane shows at a time. The editor stays mounted
     // (just hidden) so saving and validation can still reach the control pane.
@@ -498,6 +499,7 @@ class EditorInterface extends Component {
           onPublishAndDuplicate={() => this.handleOnPublish({ createNew: true, duplicate: true })}
           user={user}
           hasChanged={hasChanged}
+          canCreateNewEntry={canCreateNewEntry}
           displayUrl={displayUrl}
           collection={collection}
           hasWorkflow={hasWorkflow}
@@ -516,8 +518,8 @@ class EditorInterface extends Component {
           <ViewControls>
             {collectionI18nEnabled && !isNarrow && (
               <EditorToggle
-                isActive={i18nVisible}
-                onClick={this.handleToggleI18n}
+                isActive={rightPane === 'i18n'}
+                onClick={() => this.handleTogglePane('i18n', rightPane)}
                 size="large"
                 type="page"
                 title={t('editor.editorInterface.toggleI18n')}
@@ -526,8 +528,8 @@ class EditorInterface extends Component {
             )}
             {previewEnabled && (
               <EditorToggle
-                isActive={isNarrow ? narrowPreviewActive : previewVisible}
-                onClick={this.handleTogglePreview}
+                isActive={isNarrow ? narrowPreviewActive : rightPane === 'preview'}
+                onClick={() => this.handleTogglePane('preview', rightPane)}
                 size="large"
                 type="eye"
                 title={t('editor.editorInterface.togglePreview')}
@@ -535,8 +537,8 @@ class EditorInterface extends Component {
             )}
             {notesEnabled && (
               <EditorToggle
-                isActive={isNarrow ? narrowNotesActive : notesVisible}
-                onClick={this.handleToggleNotes}
+                isActive={isNarrow ? narrowNotesActive : rightPane === 'notes'}
+                onClick={() => this.handleTogglePane('notes', rightPane)}
                 size="large"
                 type="write"
                 title={t('editor.editorInterface.toggleNotes')}
@@ -556,9 +558,7 @@ class EditorInterface extends Component {
             narrowContent
           ) : (
             <EditorContent
-              i18nVisible={i18nVisible}
-              previewVisible={previewVisible}
-              notesVisible={notesVisible}
+              rightPane={rightPane}
               editor={editor}
               editorWithEditor={editorWithEditor}
               editorWithPreview={editorWithPreview}
@@ -589,6 +589,7 @@ EditorInterface.propTypes = {
   onChangeStatus: PropTypes.func.isRequired,
   user: PropTypes.object,
   hasChanged: PropTypes.bool,
+  canCreateNewEntry: PropTypes.bool,
   displayUrl: PropTypes.string,
   hasWorkflow: PropTypes.bool,
   useOpenAuthoring: PropTypes.bool,
