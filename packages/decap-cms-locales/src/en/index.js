@@ -174,6 +174,13 @@ const en = {
       deployPreviewPendingButtonLabel: 'Check for Preview',
       deployPreviewButtonLabel: 'View Preview',
       deployButtonLabel: 'View Live',
+      publishStatus: {
+        pending: 'Waiting for deploy',
+        running: 'Deploying...',
+        success: 'Deployed',
+        failure: 'Deploy failed',
+        cancelled: 'Deploy cancelled',
+      },
     },
     editorWidgets: {
       markdown: {

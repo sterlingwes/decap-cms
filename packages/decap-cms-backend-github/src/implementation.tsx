@@ -712,6 +712,15 @@ export default class GitHub implements Implementation {
     }
   }
 
+  async getPublishStatus(path: string) {
+    try {
+      return await this.api!.getPublishStatus(path);
+    } catch (e) {
+      // e.g. a token without access to the Actions API; just don't show a status
+      return null;
+    }
+  }
+
   updateUnpublishedEntryStatus(collection: string, slug: string, newStatus: string) {
     // updateUnpublishedEntryStatus is a transactional operation
     return runWithLock(

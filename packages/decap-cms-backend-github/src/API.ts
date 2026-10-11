@@ -31,6 +31,8 @@ import {
   throwOnConflictingBranches,
 } from 'decap-cms-lib-util';
 
+import { isPublishRun, summarizeWorkflowRuns } from './publishStatus';
+
 import type {
   AssetProxy,
   DataFile,
@@ -40,7 +42,9 @@ import type {
   Note,
   IssueState,
   CommentData,
+  PublishStatus,
 } from 'decap-cms-lib-util';
+import type { WorkflowRun } from './publishStatus';
 import type { Semaphore } from 'semaphore';
 import type { Endpoints } from '@octokit/types';
 
@@ -922,6 +926,67 @@ export default class API {
     }
 
     return branches;
+  }
+
+  /**
+   * Status of the GitHub Actions workflow runs triggered by the latest
+   * published change to `path`, or null when there are none (e.g. the entry
+   * was never published or the repo has no workflows on push).
+   */
+  async getPublishStatus(path: string): Promise<PublishStatus | null> {
+    const commits: Endpoints['GET /repos/{owner}/{repo}/commits']['response']['data'] =
+      await this.request(`${this.originRepoURL}/commits`, {
+        params: { path, sha: this.branch, per_page: 1 },
+      });
+    const commit = commits[0];
+    if (!commit) {
+      return null;
+    }
+
+    // With the editorial workflow the change lands through a merged PR, and the
+    // push workflow runs on the merge commit rather than the commit that
+    // touched the file (unless the PR was squashed or rebased, in which case
+    // the merge commit is that commit).
+    let sha = commit.sha;
+    let publishedAt = commit.commit.committer?.date;
+    const pulls: Endpoints['GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls']['response']['data'] =
+      await this.request(`${this.originRepoURL}/commits/${sha}/pulls`);
+    const mergedPull = pulls.find(pull => pull.merged_at && pull.base.ref === this.branch);
+    if (mergedPull?.merge_commit_sha) {
+      sha = mergedPull.merge_commit_sha;
+      publishedAt = mergedPull.merged_at || publishedAt;
+    }
+
+    const { workflow_runs: shaRuns }: { workflow_runs: WorkflowRun[] } = await this.request(
+      `${this.originRepoURL}/actions/runs`,
+      { params: { head_sha: sha, per_page: 100 } },
+    );
+    const runs = shaRuns.filter(isPublishRun);
+    const status = summarizeWorkflowRuns(runs, publishedAt);
+
+    // Runs are often cancelled by a newer push (e.g. publishing several entries
+    // in a row with a `concurrency` group), in which case the newest later run
+    // on the branch is the one that actually deploys this change.
+    if (status?.state === 'cancelled') {
+      const cancelledAt = runs[0].created_at;
+      const { workflow_runs: branchRuns }: { workflow_runs: WorkflowRun[] } = await this.request(
+        `${this.originRepoURL}/actions/runs`,
+        { params: { branch: this.branch, event: 'push', per_page: 20 } },
+      );
+      const later = branchRuns.filter(run => run.created_at > cancelledAt);
+      if (later.length > 0) {
+        // runs are returned newest first
+        const latestSha = later[0].head_sha;
+        return (
+          summarizeWorkflowRuns(
+            later.filter(run => run.head_sha === latestSha),
+            publishedAt,
+          ) || status
+        );
+      }
+    }
+
+    return status;
   }
 
   /**

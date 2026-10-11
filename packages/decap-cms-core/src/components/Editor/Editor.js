@@ -36,6 +36,7 @@ import {
   deleteUnpublishedEntry,
 } from '../../actions/editorialWorkflow';
 import { loadDeployPreview } from '../../actions/deploys';
+import { loadPublishStatus } from '../../actions/publishStatus';
 import { selectEntry, selectUnpublishedEntry, selectDeployPreview } from '../../reducers';
 import { selectFields, getFileFromSlug } from '../../reducers/collections';
 import { status, EDITORIAL_WORKFLOW } from '../../constants/publishModes';
@@ -85,6 +86,7 @@ export class Editor extends React.Component {
     loadEntries: PropTypes.func.isRequired,
     deployPreview: PropTypes.object,
     loadDeployPreview: PropTypes.func.isRequired,
+    loadPublishStatus: PropTypes.func.isRequired,
     currentStatus: PropTypes.string,
     user: PropTypes.object,
     location: PropTypes.shape({
@@ -411,6 +413,7 @@ export class Editor extends React.Component {
       logoutUser,
       deployPreview,
       loadDeployPreview,
+      loadPublishStatus,
       draftKey,
       slug,
       t,
@@ -466,6 +469,7 @@ export class Editor extends React.Component {
         onLogoutClick={logoutUser}
         deployPreview={deployPreview}
         loadDeployPreview={opts => loadDeployPreview(collection, slug, entry, isPublished, opts)}
+        loadPublishStatus={() => loadPublishStatus(entryDraft.get('entry'))}
         editorBackLink={editorBackLink}
         t={t}
       />
@@ -537,6 +541,7 @@ const mapDispatchToProps = {
   loadEntry,
   loadEntries,
   loadDeployPreview,
+  loadPublishStatus,
   loadLocalBackup,
   retrieveLocalBackup,
   persistLocalBackup,
