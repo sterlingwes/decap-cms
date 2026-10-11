@@ -1,5 +1,5 @@
 // @refresh reset
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
 import ImmutablePropTypes from 'react-immutable-proptypes';
 import { ClassNames, css as coreCss } from '@emotion/react';
@@ -164,7 +164,11 @@ function Editor(props) {
   }
 
   function handleInsertShortcode(pluginConfig) {
-    insertShortcode(editor, pluginConfig);
+    insertShortcode(editor, pluginConfig, {
+      getAsset: props.getAsset,
+      resolveWidget: props.resolveWidget,
+      t: props.t,
+    });
   }
 
   function handleKeyDown(event) {

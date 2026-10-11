@@ -1,5 +1,5 @@
 import PropTypes from 'prop-types';
-import React, { Component } from 'react';
+import { Component } from 'react';
 import ImmutablePropTypes from 'react-immutable-proptypes';
 import styled from '@emotion/styled';
 import { colors, transitions } from 'decap-cms-ui-default';
@@ -153,6 +153,14 @@ class NoteItem extends Component {
 
   isCurrentUserAuthor = () => {
     const { note, user } = this.props;
+
+    // The backend decides this when it can.
+    // Needed when the posting account is an App or bot, not the editor.
+    const isOwn = note.get('isOwn');
+    if (isOwn !== undefined) {
+      return isOwn;
+    }
+
     const currentUserName = user?.login || user?.name || 'Anonymous';
     return note.get('author') === currentUserName;
   };
