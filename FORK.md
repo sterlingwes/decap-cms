@@ -41,8 +41,13 @@ Merge instead of rebasing, so the fork's `main` never needs a force push.
 
 ## Releasing a bundle
 
-1. In this repo, go to Actions → **Fork release** → **Run workflow** on `main`
-   (or `gh workflow run fork-release.yml -R sterlingwes/decap-cms`).
+1. Merge to `main`. The **Fork release** workflow runs on its own when the
+   push changes the bundle's source or build: anything under `packages/`
+   (except tests and Markdown), the root `package.json`, `pnpm-lock.yaml`,
+   `pnpm-workspace.yaml`, `nx.json`, `babel.config.js`, `tsconfig.json`, or
+   the workflow itself. Docs- or CI-only merges don't make a release. To
+   release anyway, go to Actions → **Fork release** → **Run workflow** on
+   `main` (or `gh workflow run fork-release.yml -R sterlingwes/decap-cms`).
 2. The workflow builds `packages/decap-cms/dist/decap-cms.js` and creates a
    release tagged `fork-v<decap-cms version>-<short sha>`, for example
    `fork-v3.16.3-3c7ff8c`. The release has two assets: `decap-cms.js` and its

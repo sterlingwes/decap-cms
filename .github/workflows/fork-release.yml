@@ -4,16 +4,32 @@ name: Fork release
 # to a GitHub release, so sites can vendor the fork's build without it being
 # published to npm. See FORK.md for how consumers pick up a new release.
 #
-# Run it from the Actions tab (it tags the commit as
-# fork-v<decap-cms version>-<short sha>), or push a tag starting with `fork-v`.
-# Upstream's publish/create-release workflows only match `decap-*@*` tags, so
-# these releases never trigger an npm publish.
+# It runs on every push to main that changes what goes into the bundle (merged
+# PRs, upstream syncs), or from the Actions tab; both tag the commit as
+# fork-v<decap-cms version>-<short sha>. Pushing a tag starting with `fork-v`
+# releases under that name instead. Upstream's publish/create-release workflows
+# only match `decap-*@*` tags, so these releases never trigger an npm publish.
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'fork-v*'
+    # Only for changes to the bundle's source or build (tags ignore this filter).
+    # This workflow is included so a change to how releases are built ships one.
+    paths:
+      - 'packages/**'
+      - '!packages/**/__tests__/**'
+      - '!packages/**/*.md'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'nx.json'
+      - 'babel.config.js'
+      - 'tsconfig.json'
+      - '.github/workflows/fork-release.yml'
 
 permissions:
   contents: write
