@@ -19,6 +19,7 @@ import { connect } from 'react-redux';
 
 import { SettingsDropdown } from '../UI';
 import { checkBackendStatus } from '../../actions/status';
+import { loadBranchPublishStatus } from '../../actions/publishStatus';
 import { selectCanCreateNewEntry } from '../../reducers';
 
 const styles = {
@@ -153,7 +154,43 @@ const AppHeaderLogo = styled.li`
   }
 `;
 
-class Header extends Component {
+// How often to re-check the publish branch's CI runs, faster while one is in
+// progress so a fixed deploy clears promptly
+const DEPLOY_STATUS_POLL_INTERVAL = 60 * 1000;
+const DEPLOY_STATUS_RUNNING_POLL_INTERVAL = 10 * 1000;
+
+// Only show states that need attention; a healthy branch shows nothing
+const deployStatusStyles = {
+  running: { color: colors.infoText, icon: 'refresh', spinning: true },
+  failure: { color: colors.errorText, icon: 'info-circle' },
+};
+
+const AppHeaderDeployStatus = styled.a`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: ${props => props.$color};
+
+  ${Icon} {
+    color: ${props => props.$color};
+    ${props => props.$spinning && `animation: spin 1s linear infinite;`}
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+`;
+
+export class Header extends Component {
   static propTypes = {
     user: PropTypes.object.isRequired,
     collections: ImmutablePropTypes.map.isRequired,
@@ -171,9 +208,12 @@ class Header extends Component {
     isTestRepo: PropTypes.bool,
     t: PropTypes.func.isRequired,
     checkBackendStatus: PropTypes.func.isRequired,
+    loadBranchPublishStatus: PropTypes.func,
   };
 
   intervalId;
+
+  state = { deployStatus: null };
 
   componentDidMount() {
     // Manually validate PropTypes - React 19 breaking change
@@ -182,10 +222,60 @@ class Header extends Component {
     this.intervalId = setInterval(() => {
       this.props.checkBackendStatus();
     }, 5 * 60 * 1000);
+    this.loadDeployStatus();
   }
 
   componentWillUnmount() {
     clearInterval(this.intervalId);
+    clearTimeout(this.deployStatusTimer);
+    this.unmounted = true;
+  }
+
+  loadDeployStatus = async () => {
+    const { loadBranchPublishStatus } = this.props;
+    if (!loadBranchPublishStatus) {
+      return;
+    }
+    const deployStatus = await loadBranchPublishStatus();
+    if (this.unmounted) {
+      return;
+    }
+    this.setState({ deployStatus });
+    // a null status means the backend doesn't support it or the repo has no
+    // workflows, so there's nothing to keep checking
+    if (deployStatus) {
+      this.deployStatusTimer = setTimeout(
+        this.loadDeployStatus,
+        deployStatus.state === 'running'
+          ? DEPLOY_STATUS_RUNNING_POLL_INTERVAL
+          : DEPLOY_STATUS_POLL_INTERVAL,
+      );
+    }
+  };
+
+  renderDeployStatus() {
+    const { deployStatus } = this.state;
+    const { t } = this.props;
+    const style = deployStatus && deployStatusStyles[deployStatus.state];
+    if (!style) {
+      return null;
+    }
+
+    const { url, name, state } = deployStatus;
+    const label = t(`app.header.deployStatus.${state}`);
+    return (
+      <AppHeaderDeployStatus
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={name ? `${name}: ${label}` : label}
+        $color={style.color}
+        $spinning={style.spinning}
+      >
+        <Icon type={style.icon} size="xsmall" />
+        {label}
+      </AppHeaderDeployStatus>
+    );
   }
 
   handleCreatePostClick = collectionName => {
@@ -251,6 +341,7 @@ class Header extends Component {
             </AppHeaderNavList>
           </nav>
           <AppHeaderActions>
+            {this.renderDeployStatus()}
             {creatableCollections.size > 0 && (
               <Dropdown
                 renderButton={() => (
@@ -284,6 +375,7 @@ class Header extends Component {
 
 const mapDispatchToProps = {
   checkBackendStatus,
+  loadBranchPublishStatus,
 };
 
 function mapStateToProps(state, ownProps) {

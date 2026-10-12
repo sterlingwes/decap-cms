@@ -1197,6 +1197,17 @@ export class Backend {
   }
 
   /**
+   * Status of the CI run(s) for the latest change on the publish branch, i.e.
+   * whether deploys are going through, for backends that support it.
+   */
+  async getBranchPublishStatus() {
+    if (!this.implementation.getBranchPublishStatus) {
+      return null;
+    }
+    return this.implementation.getBranchPublishStatus();
+  }
+
+  /**
    * Requests a base URL from the backend for previewing a specific entry.
    * Supports polling via `maxAttempts` and `interval` options, as there is
    * often a delay before a preview URL is available.

@@ -34,7 +34,7 @@ import {
   throwOnConflictingBranches,
 } from 'decap-cms-lib-util';
 
-import { isPublishRun, summarizeWorkflowRuns } from './publishStatus';
+import { isPublishRun, summarizeLatestRuns, summarizeWorkflowRuns } from './publishStatus';
 
 import type {
   AssetProxy,
@@ -1146,29 +1146,40 @@ export default class API {
     const runs = shaRuns.filter(isPublishRun);
     const status = summarizeWorkflowRuns(runs, publishedAt);
 
-    // Runs are often cancelled by a newer push (e.g. publishing several entries
-    // in a row with a `concurrency` group), in which case the newest later run
-    // on the branch is the one that actually deploys this change.
-    if (status?.state === 'cancelled') {
-      const cancelledAt = runs[0].created_at;
-      const { workflow_runs: branchRuns }: { workflow_runs: WorkflowRun[] } = await this.request(
-        `${this.originRepoURL}/actions/runs`,
-        { params: { branch: this.branch, event: 'push', per_page: 20 } },
+    // A later push deploys this change along with its own, so when this
+    // change's runs didn't deploy it (they were cancelled by a newer push, e.g.
+    // publishing several entries in a row with a `concurrency` group, or failed
+    // because of another entry), the newest later runs say whether it's live.
+    if (status?.state === 'cancelled' || status?.state === 'failure') {
+      const startedAt = runs.reduce(
+        (earliest, run) => (run.created_at < earliest ? run.created_at : earliest),
+        runs[0].created_at,
       );
-      const later = branchRuns.filter(run => run.created_at > cancelledAt);
-      if (later.length > 0) {
-        // runs are returned newest first
-        const latestSha = later[0].head_sha;
-        return (
-          summarizeWorkflowRuns(
-            later.filter(run => run.head_sha === latestSha),
-            publishedAt,
-          ) || status
-        );
-      }
+      const later = (await this.getBranchRuns()).filter(
+        run => run.head_sha !== sha && run.created_at > startedAt,
+      );
+      return summarizeLatestRuns(later) || status;
     }
 
     return status;
+  }
+
+  /**
+   * Status of the GitHub Actions workflow runs for the latest change on the
+   * branch, i.e. whether deploys are currently going through, or null when the
+   * branch has no runs.
+   */
+  async getBranchPublishStatus(): Promise<PublishStatus | null> {
+    return summarizeLatestRuns(await this.getBranchRuns());
+  }
+
+  // Recent workflow runs on the branch, newest first
+  async getBranchRuns(): Promise<WorkflowRun[]> {
+    const { workflow_runs: runs }: { workflow_runs: WorkflowRun[] } = await this.request(
+      `${this.originRepoURL}/actions/runs`,
+      { params: { branch: this.branch, per_page: 30 } },
+    );
+    return runs;
   }
 
   /**
