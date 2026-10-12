@@ -70,7 +70,9 @@ the pin, use either option:
 
 - **GitHub:** in palestine-numbers, go to Actions → **Update Decap CMS** →
   **Run workflow**. Leave the tag empty to use the latest fork release. The
-  workflow opens a PR that updates the pin.
+  workflow pushes a `chore/decap-cms-<tag>` branch. Use the **Open the pull
+  request** link in the run summary to open the PR, because Actions in that
+  repo can't open PRs.
 - **Locally:** run `bun run update-decap` (latest release) or
   `bun run update-decap fork-v3.16.3-3c7ff8c`. Then commit
   `scripts/build/decap-cms.json`.
