@@ -1,0 +1,81 @@
+name: Fork release
+
+# Builds the self-contained decap-cms.js bundle from this fork and attaches it
+# to a GitHub release, so sites can vendor the fork's build without it being
+# published to npm. See FORK.md for how consumers pick up a new release.
+#
+# Run it from the Actions tab (it tags the commit as
+# fork-v<decap-cms version>-<short sha>), or push a tag starting with `fork-v`.
+# Upstream's publish/create-release workflows only match `decap-*@*` tags, so
+# these releases never trigger an npm publish.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'fork-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.12.0
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'pnpm'
+      - name: install dependencies (skip Cypress binary)
+        run: pnpm install --frozen-lockfile
+        env:
+          CYPRESS_INSTALL_BINARY: 0
+      # build:esm first, as upstream's publish does: without each package's
+      # dist/esm, webpack falls back to their UMD builds, which expect the core
+      # as an external global and crash on load ("reading 'registerBackend'")
+      - name: build the decap-cms bundle
+        run: |
+          pnpm run build:esm
+          pnpm exec nx run decap-cms:build --output-style=stream
+      - name: check the bundle is self-contained
+        run: |
+          if grep -q '__nested_webpack_require' packages/decap-cms/dist/decap-cms.js; then
+            echo "::error::decap-cms.js wraps another package's UMD build; build:esm output was not used"
+            exit 1
+          fi
+
+      - name: pick the release tag
+        id: tag
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            version=$(node -p "require('./packages/decap-cms/package.json').version")
+            tag="fork-v${version}-${GITHUB_SHA::7}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          cd packages/decap-cms/dist
+          sha256sum decap-cms.js > decap-cms.js.sha256
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::release $TAG already exists"
+            exit 1
+          fi
+          gh release create "$TAG" decap-cms.js decap-cms.js.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "decap-cms.js built from ${GITHUB_SHA}. sha256: $(cut -d' ' -f1 decap-cms.js.sha256)"
