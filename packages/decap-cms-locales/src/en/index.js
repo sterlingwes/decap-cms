@@ -22,6 +22,10 @@ const en = {
       workflow: 'Workflow',
       media: 'Media',
       quickAdd: 'Quick add',
+      deployStatus: {
+        running: 'Deploying...',
+        failure: 'Deploys failing',
+      },
     },
     app: {
       errorHeader: 'Error loading the CMS configuration',

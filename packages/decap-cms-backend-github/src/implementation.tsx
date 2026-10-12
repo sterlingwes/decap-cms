@@ -710,6 +710,14 @@ export default class GitHub implements Implementation {
     }
   }
 
+  async getBranchPublishStatus() {
+    try {
+      return await this.api!.getBranchPublishStatus();
+    } catch (e) {
+      return null;
+    }
+  }
+
   updateUnpublishedEntryStatus(collection: string, slug: string, newStatus: string) {
     // updateUnpublishedEntryStatus is a transactional operation
     return runWithLock(

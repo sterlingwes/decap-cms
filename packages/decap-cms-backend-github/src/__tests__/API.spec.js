@@ -1096,6 +1096,117 @@ describe('github API', () => {
         name: 'Deploy',
       });
     });
+
+    describe('when the publish run failed', () => {
+      const failed = {
+        name: 'Deploy',
+        event: 'push',
+        status: 'completed',
+        conclusion: 'failure',
+        head_sha: 'file-commit',
+        html_url: 'failed-url',
+        created_at: '2026-01-01T00:00:00Z',
+      };
+      function laterRun(conclusion, html_url) {
+        return {
+          ...failed,
+          conclusion,
+          head_sha: 'later-commit',
+          html_url,
+          created_at: '2026-01-01T00:05:00Z',
+        };
+      }
+
+      it('should report it deployed once a later run on the branch succeeds', async () => {
+        // e.g. an earlier entry's broken content failed this entry's deploy,
+        // and fixing that entry deployed both
+        const api = new API({ branch: 'main', repo: 'owner/repo' });
+        mockRequests(api, {
+          commits: [commit],
+          runs: { 'file-commit': [failed] },
+          branchRuns: [laterRun('success', 'later-url'), failed],
+        });
+
+        await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+          state: 'success',
+          url: 'later-url',
+          name: 'Deploy',
+        });
+        expect(api.request).toHaveBeenCalledWith('/repos/owner/repo/actions/runs', {
+          params: { branch: 'main', per_page: 30 },
+        });
+      });
+
+      it('should link to the latest failing run while deploys are still blocked', async () => {
+        const api = new API({ branch: 'main', repo: 'owner/repo' });
+        mockRequests(api, {
+          commits: [commit],
+          runs: { 'file-commit': [failed] },
+          branchRuns: [laterRun('failure', 'later-url'), failed],
+        });
+
+        await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+          state: 'failure',
+          url: 'later-url',
+          name: 'Deploy',
+        });
+      });
+
+      it('should keep its own failure when only its own runs have run since', async () => {
+        const api = new API({ branch: 'main', repo: 'owner/repo' });
+        const chained = { ...failed, event: 'workflow_run', created_at: '2026-01-01T00:01:00Z' };
+        mockRequests(api, {
+          commits: [commit],
+          runs: { 'file-commit': [chained, failed] },
+          branchRuns: [chained, failed],
+        });
+
+        await expect(api.getPublishStatus('posts/a.md')).resolves.toEqual({
+          state: 'failure',
+          url: 'failed-url',
+          name: 'Deploy',
+        });
+      });
+    });
+  });
+
+  describe('getBranchPublishStatus', () => {
+    function branchRun(head_sha, conclusion, html_url) {
+      return {
+        name: 'Deploy',
+        event: 'push',
+        status: 'completed',
+        conclusion,
+        head_sha,
+        html_url,
+      };
+    }
+
+    it("should summarize the newest commit's runs on the branch", async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      api.request = jest.fn().mockResolvedValue({
+        workflow_runs: [
+          branchRun('head', 'failure', 'head-url'),
+          branchRun('previous', 'success', 'previous-url'),
+        ],
+      });
+
+      await expect(api.getBranchPublishStatus()).resolves.toEqual({
+        state: 'failure',
+        url: 'head-url',
+        name: 'Deploy',
+      });
+      expect(api.request).toHaveBeenCalledWith('/repos/owner/repo/actions/runs', {
+        params: { branch: 'main', per_page: 30 },
+      });
+    });
+
+    it('should return null when the branch has no runs', async () => {
+      const api = new API({ branch: 'main', repo: 'owner/repo' });
+      api.request = jest.fn().mockResolvedValue({ workflow_runs: [] });
+
+      await expect(api.getBranchPublishStatus()).resolves.toBeNull();
+    });
   });
 
   describe('parseCommentToNote', () => {

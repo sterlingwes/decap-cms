@@ -1,4 +1,4 @@
-import { summarizeWorkflowRuns, RUN_START_GRACE_MS } from '../publishStatus';
+import { summarizeLatestRuns, summarizeWorkflowRuns, RUN_START_GRACE_MS } from '../publishStatus';
 
 function run(overrides) {
   return {
@@ -66,5 +66,52 @@ describe('summarizeWorkflowRuns', () => {
       url: 'https://github.com/owner/repo/actions/runs/1',
       name: 'Deploy',
     });
+  });
+});
+
+describe('summarizeLatestRuns', () => {
+  function branchRun(head_sha, event, conclusion, html_url) {
+    return run({ name: undefined, head_sha, event, conclusion, html_url });
+  }
+
+  it('should return null when the branch has no runs', () => {
+    expect(summarizeLatestRuns([])).toBeNull();
+  });
+
+  it("should summarize only the newest commit's runs", () => {
+    expect(
+      summarizeLatestRuns([
+        branchRun('new', 'push', 'success', 'new-url'),
+        branchRun('old', 'push', 'failure', 'old-url'),
+      ]),
+    ).toEqual({ state: 'success', url: 'new-url' });
+  });
+
+  it('should include runs chained off the newest commit', () => {
+    expect(
+      summarizeLatestRuns([
+        branchRun('new', 'workflow_run', 'failure', 'deploy-url'),
+        branchRun('new', 'push', 'success', 'build-url'),
+      ]),
+    ).toEqual({ state: 'failure', url: 'deploy-url' });
+  });
+
+  it("should pick the newest push over an older commit's later chained run", () => {
+    expect(
+      summarizeLatestRuns([
+        branchRun('old', 'workflow_run', 'failure', 'old-deploy-url'),
+        branchRun('new', 'push', 'success', 'new-url'),
+        branchRun('old', 'push', 'success', 'old-build-url'),
+      ]),
+    ).toEqual({ state: 'success', url: 'new-url' });
+  });
+
+  it('should ignore runs not triggered by a push', () => {
+    expect(
+      summarizeLatestRuns([
+        branchRun('new', 'dynamic', 'failure', 'dependabot-url'),
+        branchRun('new', 'push', 'success', 'push-url'),
+      ]),
+    ).toEqual({ state: 'success', url: 'push-url' });
   });
 });

@@ -24,3 +24,22 @@ export function loadPublishStatus(entry: EntryMap) {
     }
   };
 }
+
+/**
+ * Fetches the status of the CI run(s) for the latest change on the publish
+ * branch, i.e. whether deploys are currently going through or blocked.
+ */
+export function loadBranchPublishStatus() {
+  return async (
+    _dispatch: ThunkDispatch<State, undefined, AnyAction>,
+    getState: () => State,
+  ): Promise<PublishStatus | null> => {
+    const backend = currentBackend(getState().config);
+    try {
+      return await backend.getBranchPublishStatus();
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  };
+}

@@ -62,3 +62,22 @@ export function summarizeWorkflowRuns(
 
   return toStatus('success', runs.find(run => run.conclusion === 'success') || runs[0]);
 }
+
+/**
+ * Status of the newest commit's runs among a branch's workflow runs (newest
+ * first). Every run on the branch deploys all the changes before it, so this
+ * is whether the branch's latest changes are deployed (or deploys are blocked).
+ */
+export function summarizeLatestRuns(branchRuns: WorkflowRun[]): PublishStatus | null {
+  const runs = branchRuns.filter(isPublishRun);
+  // A run chained off an older commit's run can start after a newer push's
+  // run, so the newest push identifies the newest commit.
+  const latest = runs.find(run => run.event === 'push') || runs[0];
+  if (!latest) {
+    return null;
+  }
+  return summarizeWorkflowRuns(
+    runs.filter(run => run.head_sha === latest.head_sha),
+    undefined,
+  );
+}

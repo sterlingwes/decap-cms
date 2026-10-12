@@ -58,7 +58,7 @@ export interface Map {
 
 /**
  * Status of the CI run(s) (e.g. GitHub Actions workflows) triggered by the
- * latest published change to an entry.
+ * latest published change to an entry, or to the publish branch as a whole.
  */
 export type PublishStatus = {
   state: 'pending' | 'running' | 'success' | 'failure' | 'cancelled';
@@ -286,6 +286,7 @@ export interface Implementation {
     slug: string,
   ) => Promise<{ url: string; status: string } | null>;
   getPublishStatus?: (path: string) => Promise<PublishStatus | null>;
+  getBranchPublishStatus?: () => Promise<PublishStatus | null>;
 
   allEntriesByFolder?: (
     folder: string,
